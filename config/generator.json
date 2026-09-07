@@ -1,0 +1,22 @@
+{
+  "generator_version": "1.0.0",
+  "seed": 20260908,
+  "instruction_count": 2000,
+  "start_business_date": "2026-09-01",
+  "business_days": 3,
+  "timezone": "+05:30",
+  "cutoff_time": "18:00:00",
+  "grace_minutes": 120,
+  "currency": "INR",
+  "partners": ["ARUNA", "BODHI", "CHETAK"],
+  "amount_min_paise": 100000,
+  "amount_max_paise": 50000000,
+  "anomaly_rates": {
+    "missing_event": 0.025,
+    "duplicate_event": 0.020,
+    "amount_mismatch": 0.020,
+    "status_mismatch": 0.015,
+    "timing_difference": 0.020,
+    "composite_match": 0.020
+  }
+}

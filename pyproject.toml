@@ -1,0 +1,22 @@
+[project]
+name = "co-lending-control-tower"
+version = "0.1.0"
+description = "Evidence-first co-lending reconciliation control"
+requires-python = ">=3.10"
+
+[project.scripts]
+control-tower-generate = "control_tower.generator.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
