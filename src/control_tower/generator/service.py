@@ -19,7 +19,7 @@ from .models import Dataset, GeneratedData
 
 
 def _assign_anomalies(config: GeneratorConfig, rng: random.Random) -> dict[int, str]:
-    # Keep anomaly populations disjoint so each event has one unambiguous truth label.
+    # One primary label per event keeps ground-truth evaluation unambiguous.
     indices = list(range(config.instruction_count))
     rng.shuffle(indices)
     assigned: dict[int, str] = {}
@@ -125,7 +125,7 @@ def generate(
             late_received = cutoff + config.grace / 2
             bank_row["received_timestamp"] = _iso(late_received)
         if anomaly == "composite_match":
-            # Splits preserve every paise, including odd amounts, without a tolerance.
+            # Put the odd-paise remainder in the second leg. both legs must balance exactly.
             first = amount // 2
             second = amount - first
             bank_row["debit_amount_paise"] = first

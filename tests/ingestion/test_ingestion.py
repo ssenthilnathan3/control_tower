@@ -31,7 +31,7 @@ def test_ingests_valid_feeds_and_preserves_immutable_evidence(tmp_path: Path) ->
         assert len(first["payload_hash"]) == 64
 
 
-def test_rejects_a_source_contract_violation(tmp_path: Path) -> None:
+def test_quarantines_a_bad_row_without_rejecting_valid_rows(tmp_path: Path) -> None:
     generated = generate(CONFIG, tmp_path / "generated")
     feed = generated.output_dir / "feeds/originator.csv"
     rows = list(csv.DictReader(feed.read_text().splitlines()))
@@ -41,8 +41,28 @@ def test_rejects_a_source_contract_violation(tmp_path: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
-    with pytest.raises(IngestionError, match="currency: must be INR"):
-        ingest_generated_feeds(generated.output_dir, tmp_path / "evidence")
+    manifest_path = generated.output_dir / "manifests/originator.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["file_sha256"] = hashlib.sha256(feed.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = ingest_generated_feeds(generated.output_dir, tmp_path / "evidence")
+    originator = next(item for item in result.artifacts if item.source == "originator")
+    assert originator.accepted_count == originator.row_count - 1
+    assert originator.quarantined_count == 1
+    assert result.quarantined_row_count == 1
+    quarantined = originator.quarantined_records[0]
+    assert quarantined.line_number == 2
+    assert quarantined.errors == ("currency: must be INR",)
+
+    evidence = [
+        json.loads(line)
+        for line in (originator.evidence_path / "records.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert evidence[0]["validation_state"] == "QUARANTINED"
+    assert all(row["validation_state"] == "ACCEPTED" for row in evidence[1:])
 
 
 @pytest.mark.parametrize(
@@ -55,6 +75,12 @@ def test_rejects_manifest_control_mismatch(tmp_path: Path, manifest_field: str) 
     manifest = json.loads(manifest_path.read_text())
     manifest[manifest_field] = "incorrect"
     manifest_path.write_text(json.dumps(manifest))
+    artifact_hash = hashlib.sha256(
+        (generated.output_dir / "feeds/bank.csv").read_bytes()
+    ).hexdigest()
 
     with pytest.raises(IngestionError, match="bank manifest mismatch"):
         ingest_generated_feeds(generated.output_dir, tmp_path / "evidence")
+    assert (
+        tmp_path / "evidence" / "artifacts" / "bank" / artifact_hash / "source.csv"
+    ).exists()

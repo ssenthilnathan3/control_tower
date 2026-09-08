@@ -9,7 +9,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from .contracts import CONTRACTS, SourceContract
-from .models import IngestedArtifact, IngestionError, IngestionResult
+from .models import (
+    IngestedArtifact,
+    IngestionError,
+    IngestionResult,
+    QuarantinedRecord,
+)
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -28,7 +33,7 @@ def _load_manifest(path: Path, source: str) -> dict[str, object]:
     return manifest
 
 
-def _read_and_validate(
+def _read_feed(
     feed_path: Path, source: str, contract: SourceContract
 ) -> tuple[bytes, list[dict[str, str]]]:
     try:
@@ -39,18 +44,14 @@ def _read_and_validate(
     reader = csv.DictReader(text.splitlines())
     if tuple(reader.fieldnames or ()) != contract.fields:
         raise IngestionError(f"{source} headers do not match the published contract")
-    rows = list(reader)
-    errors: list[str] = []
-    for line_number, row in enumerate(rows, start=2):
-        errors.extend(
-            f"line {line_number}: {message}" for message in contract.validate(row)
-        )
-    if errors:
-        preview = "; ".join(errors[:10])
-        raise IngestionError(
-            f"{source} has {len(errors)} validation error(s): {preview}"
-        )
-    return raw, rows
+    return raw, list(reader)
+
+
+def _detail_total(rows: list[dict[str, str]], amount_field: str) -> int | None:
+    try:
+        return sum(int(row[amount_field]) for row in rows)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _verify_controls(
@@ -61,7 +62,7 @@ def _verify_controls(
     manifest: dict[str, object],
 ) -> tuple[str, int]:
     artifact_hash = _sha256_bytes(raw)
-    total = sum(int(row[contract.amount_field]) for row in rows)
+    total = _detail_total(rows, contract.amount_field)
     expected = {
         "file_sha256": artifact_hash,
         "declared_row_count": len(rows),
@@ -74,6 +75,8 @@ def _verify_controls(
     ]
     if mismatches:
         raise IngestionError(f"{source} manifest mismatch: {'; '.join(mismatches)}")
+    if total is None:
+        raise IngestionError(f"{source} detail amount total is not computable")
     return artifact_hash, total
 
 
@@ -84,39 +87,75 @@ def _preserve_evidence(
     rows: list[dict[str, str]],
     contract: SourceContract,
     artifact_hash: str,
-    total: int,
-) -> Path:
+    total: int | None,
+    validation_errors: list[tuple[str, ...]],
+) -> tuple[Path, tuple[QuarantinedRecord, ...]]:
     destination = evidence_root / "artifacts" / source / artifact_hash
 
-    # Content-addressed storage makes an already preserved artifact an immutable no-op.
+    # Same hash means same bytes. reuse the evidence instead of writing another copy.
     if destination.exists():
-        return destination
+        records = [
+            json.loads(line)
+            for line in (destination / "records.jsonl").read_text().splitlines()
+        ]
+        quarantined = tuple(
+            QuarantinedRecord(
+                source=record["source"],
+                record_id=record["record_id"],
+                line_number=record["line_number"],
+                payload_hash=record["payload_hash"],
+                source_location=record["source_location"],
+                errors=tuple(record["validation_errors"]),
+            )
+            for record in records
+            if record["validation_state"] == "QUARANTINED"
+        )
+        return destination, quarantined
     temporary = destination.with_name(f".{artifact_hash}.{uuid4().hex}.tmp")
     temporary.mkdir(parents=True)
     artifact_path = temporary / "source.csv"
     artifact_path.write_bytes(raw)
 
-    # Published feeds contain one physical line per record; retaining that line allows
-    # the payload hash and source location to be reproduced from untouched bytes.
+    # Generated feeds have no multiline fields. hash the physical line so an operator
+    # can reproduce this row's evidence from `source.csv`.
     physical_lines = raw.splitlines(keepends=True)
+    quarantined: list[QuarantinedRecord] = []
     with (temporary / "records.jsonl").open(
         "w", encoding="utf-8", newline="\n"
     ) as output:
-        for line_number, (row, raw_line) in enumerate(
-            zip(rows, physical_lines[1:]), start=2
+        for line_number, (row, raw_line, errors) in enumerate(
+            zip(rows, physical_lines[1:], validation_errors), start=2
         ):
+            payload_hash = _sha256_bytes(raw_line)
+            source_location = f"{artifact_path.name}#line={line_number}"
             record = {
                 "artifact_hash": artifact_hash,
-                "payload_hash": _sha256_bytes(raw_line),
-                "record_id": row[contract.record_id_field],
+                "line_number": line_number,
+                "payload_hash": payload_hash,
+                "record_id": row.get(contract.record_id_field, ""),
                 "source": source,
-                "source_location": f"{artifact_path.name}#line={line_number}",
+                "source_location": source_location,
+                "validation_errors": errors,
+                "validation_state": "QUARANTINED" if errors else "ACCEPTED",
             }
             output.write(
                 json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
             )
+            if errors:
+                quarantined.append(
+                    QuarantinedRecord(
+                        source,
+                        record["record_id"],
+                        line_number,
+                        payload_hash,
+                        source_location,
+                        errors,
+                    )
+                )
     receipt = {
         "artifact_hash": artifact_hash,
+        "accepted_count": len(rows) - len(quarantined),
+        "quarantined_count": len(quarantined),
         "row_count": len(rows),
         "source": source,
         "total_amount_paise": total,
@@ -129,11 +168,11 @@ def _preserve_evidence(
     try:
         os.replace(temporary, destination)
     except OSError:
-        # A concurrent writer may have published the same content-addressed artifact.
+        # Another worker may have won the same-hash race. its bytes are equivalent.
         if not destination.exists():
             raise
         shutil.rmtree(temporary)
-    return destination
+    return destination, tuple(quarantined)
 
 
 def ingest_generated_feeds(input_dir: Path, evidence_root: Path) -> IngestionResult:
@@ -141,12 +180,34 @@ def ingest_generated_feeds(input_dir: Path, evidence_root: Path) -> IngestionRes
     for source, contract in CONTRACTS.items():
         feed_path = input_dir / "feeds" / f"{source}.csv"
         manifest = _load_manifest(input_dir / "manifests" / f"{source}.json", source)
-        raw, rows = _read_and_validate(feed_path, source, contract)
-        artifact_hash, total = _verify_controls(source, raw, rows, contract, manifest)
-        evidence_path = _preserve_evidence(
-            evidence_root, source, raw, rows, contract, artifact_hash, total
+        raw, rows = _read_feed(feed_path, source, contract)
+        artifact_hash = _sha256_bytes(raw)
+        validation_errors = [tuple(contract.validate(row)) for row in rows]
+        total = _detail_total(rows, contract.amount_field)
+
+        # A failed control is still evidence of what arrived. store it before rejecting.
+        evidence_path, quarantined = _preserve_evidence(
+            evidence_root,
+            source,
+            raw,
+            rows,
+            contract,
+            artifact_hash,
+            total,
+            validation_errors,
+        )
+        artifact_hash, verified_total = _verify_controls(
+            source, raw, rows, contract, manifest
         )
         artifacts.append(
-            IngestedArtifact(source, artifact_hash, len(rows), total, evidence_path)
+            IngestedArtifact(
+                source,
+                artifact_hash,
+                len(rows),
+                verified_total,
+                evidence_path,
+                len(rows) - len(quarantined),
+                quarantined,
+            )
         )
     return IngestionResult(tuple(artifacts))

@@ -2,78 +2,282 @@
 
 ## problem
 
-one disbursement appears in the originator, bank, and LMS. the records use
-different IDs, statuses, and timestamps. some arrive late. some are wrong.
+one disbursement shows up in three systems. the originator says what should be
+paid. the bank says what moved. the LMS says what was booked. those records do
+not always arrive together and they do not use the same schema.
 
-we need to retain what each source sent, reconcile only when the evidence is
-strong enough, and route everything else to an owner. no forced matches. no
-silent balancing entries.
+the control tower needs to answer three things:
+
+- what evidence do we have?
+- what does not reconcile, including the INR value?
+- who needs to act before we can close?
+
+the dangerous shortcut is to force records together until totals look right.
+we do the opposite. source data stays immutable. uncertain records stay visible.
 
 ## assumptions
 
 - all data is synthetic
-- money is INR stored as integer paise
-- amount tolerance is zero in Phase 1
-- timestamps include an offset
-- probable matching is not part of the Phase 1 result
+- money is INR and stored as integer paise
+- timestamps include an offset; the configured timezone is `+05:30`
+- the originator instruction is the expected disbursement
+- bank settlement proves movement of money
+- LMS booking proves creation of the loan record
+- amount tolerance is zero for Phase 1
+- a timing difference is pending only inside the configured grace window
+- probable or fuzzy matching is not part of Phase 1
+
+some of these rules may change. they need to stay in config or in a versioned
+rule, not disappear into a query.
 
 ## design
 
-use a modular monolith. the workload is small and ingestion, matching,
-exceptions, and close need one consistent snapshot. services would add replay
-and partial-failure problems without giving us useful isolation yet.
+Phase 1 is a modular monolith.
 
-```text
-generator -> source feeds + manifests -> ingestion
-          -> isolated truth            -> raw evidence + quarantine
-                                        -> canonical records
-                                        -> deterministic reconciliation
-                                        -> matches / pending / exceptions
-                                        -> close or hold
-```
+why not services? we have one small workload and several operations that need
+the same financial snapshot. splitting ingestion, matching, exceptions, and
+close into services would add message delivery and partial-failure problems.
+what are we gaining from that in this assessment? not much.
 
-planned modules:
+the modules are still separate in code:
 
 ```text
 src/control_tower/
-  generator/
-  ingestion/
-  canonical/
-  reconciliation/
-  exceptions/
-  close_control/
+  generator/       builds deterministic source data
+  ingestion/       validates delivery and owns raw evidence
+  canonical/       maps accepted rows to one event shape       [planned]
+  reconciliation/  owns match decisions                        [planned]
+  exceptions/      owns investigation state and actions        [planned]
+  close_control/   owns close-or-hold decisions                 [planned]
 ```
+
+one module should not update another module's state directly. for example,
+reconciliation can reference an ingestion record. it cannot rewrite the raw
+payload because a match became inconvenient.
+
+## flow
+
+```text
+config/generator.json
+        |
+        v
+generator.service.generate
+        |
+        +--> feeds/*.csv
+        +--> manifests/*.json
+        +--> truth/*.jsonl       evaluation only
+        +--> quality-report.json
+        |
+        v
+ingestion.service.ingest_generated_feeds
+        |
+        +--> validate header and fields
+        +--> check hash, count, and amount controls
+        +--> evidence/artifacts/<source>/<sha256>/source.csv
+        +--> records.jsonl with ACCEPTED or QUARANTINED
+        |
+        v
+canonical records               [planned]
+        |
+        v
+exact -> composite -> timing -> unresolved
+        |
+        +--> exception queue
+        +--> close decision
+```
+
+ground truth is deliberately outside this runtime flow. if reconciliation can
+read `truth/classifications.jsonl`, the evaluation tells us nothing.
+
+## generator
+
+`generator/config.py` parses the seed, dates, partners, amounts, and anomaly
+rates. `_assign_anomalies` shuffles event indexes once and assigns disjoint
+ranges. one event gets one primary truth label. this avoids unclear expected
+results such as an event being both missing and an amount mismatch.
+
+`generator/service.py` creates the business event and then changes the source
+rows needed for that anomaly. composite bank records split the amount into two
+integer values. the second value gets the remainder, so odd paise still balance.
+
+`generator/io.py` fixes JSON ordering and CSV line endings. these details matter
+because feed hashes must be identical for the same seed.
+
+current output for the default config:
+
+| item | value |
+| --- | ---: |
+| instructions | 2,000 |
+| source rows | 6,030 |
+| partners | 3 |
+| business days | 3 |
+| anomalous events | 240 |
+
+## ingestion
+
+`ingestion/contracts.py` owns source validation. it checks exact headers,
+required IDs, positive paise amounts, INR, source statuses, and timezone-aware
+timestamps. normalization does not get a chance to repair invalid input.
+
+`ingestion/service.py` has two failure levels.
+
+| failure | result |
+| --- | --- |
+| file cannot be decoded | reject artifact |
+| header does not match | reject artifact |
+| hash, row count, or amount total differs | preserve artifact, then reject |
+| one row has an invalid field | quarantine row; keep valid rows accepted |
+
+why preserve a failed delivery? because the operator needs to prove what was
+received. otherwise a partner can resend a corrected file and erase the reason
+the first batch failed.
+
+evidence is content-addressed:
+
+```text
+evidence/artifacts/<source>/<artifact_hash>/
+  source.csv       exact received bytes
+  records.jsonl    row IDs, hashes, locations, validation state
+  receipt.json     count, amount, and quarantine summary
+```
+
+the directory is built under a temporary name and published with `os.replace`.
+a reader either sees the complete artifact or nothing. if another process has
+already published the same hash, the second write reuses it.
+
+this is not complete ingestion idempotency yet. content addressing handles the
+same bytes, but we still need a persisted source identity such as
+`(source, batch_id, source_record_id)`. same identity plus same payload should be
+a no-op. same identity plus different payload should be a conflict.
 
 ## state
 
-raw source bytes need to survive every retry and correction. store them by
-SHA-256 and make every derived row point back to an artifact and location.
+right now raw evidence lives on the filesystem. generator truth also lives on
+the filesystem, under a separate directory.
 
-PostgreSQL will own operational state once canonicalization starts. unique
-constraints will protect source identities and match membership. raw files stay
-outside the database.
+PostgreSQL will own operational state when canonicalization starts:
+
+- ingestion registrations and identity conflicts
+- canonical events
+- reconciliation runs and match membership
+- exceptions and action history
+- close decisions and approvals
+
+why PostgreSQL? these records need unique constraints and transactions. using a
+queue or separate database for each module would make it harder to answer a
+basic question: which exact snapshot produced this close decision?
+
+raw files should remain outside relational rows. locally that is the evidence
+directory. in production it would be versioned object storage with retention
+and encryption policies.
 
 ## invariants
 
-- source evidence is immutable
-- quarantined rows cannot be matched
-- ground truth is unavailable to runtime matching
-- one source row cannot be consumed by two final matches
-- every accepted value is matched, pending, or unresolved
-- the same snapshot and policy produce the same close result
+- source bytes do not change after receipt
+- every accepted or quarantined row points to retrievable evidence
+- quarantined rows cannot enter canonicalization
+- manifest mismatches cannot be reported as successful ingestion
+- ground truth cannot be read by runtime matching
+- a canonical record must point to one raw record
+- one source record cannot belong to two final matches
+- every accepted value ends as matched, pending, or unresolved
+- unresolved value cannot disappear when an exception is resolved
+- the same snapshot, config, and rule version produce the same close result
+
+the last six invariants are target behavior. tests will be added with those
+modules.
+
+## matching
+
+planned order:
+
+```text
+duplicate delivery
+  -> exact reference + currency + status + amount
+  -> documented composite with exact sum
+  -> timing difference inside grace
+  -> unresolved
+```
+
+order matters. if duplicate rows reach composite matching first, they can make
+an incorrect sum look valid. arbitrary subset-sum search is also excluded. a
+shared reference and exact amount relationship are required.
+
+each decision will store the rule version and evidence IDs it used. rerunning
+with unchanged inputs should return the existing run instead of writing another
+set of decisions.
+
+## close control
+
+the close equation for each controlled scope will be:
+
+```text
+accepted count = exact + composite + pending + unresolved
+accepted value = exact + composite + pending + unresolved
+```
+
+quarantined rows and artifact control failures sit outside accepted totals, but
+remain visible blockers. a `HOLD` result must list the record IDs and INR value
+that caused it.
+
+what state needs to survive? the input snapshot, policy version, blocker IDs,
+decision, actor, and decision hash. without those fields we can display a close
+result but cannot reproduce it.
 
 ## failure modes
 
-- bad row: quarantine it and retain valid rows
-- bad manifest: preserve the artifact and reject the batch
-- replay: return the existing result
-- same identity with changed bytes: retain both versions and raise a conflict
-- partial reconciliation: rollback the run and retry from the same snapshot
+### process stops while writing evidence
+
+only the temporary directory exists. retry from the original feed. incomplete
+directories are never published as artifact hashes.
+
+### the same artifact arrives twice
+
+reuse the content-addressed evidence. persisted ingestion idempotency is still
+needed before this is a complete no-op at the business level.
+
+### the same source identity has different bytes
+
+planned behavior: keep both artifacts, mark an identity conflict, and block the
+record from matching. do not overwrite the first version.
+
+### one row is malformed
+
+store its payload hash, source location, and validation errors. continue with
+valid rows. a bad amount that prevents control-total verification must also
+surface as an artifact control failure.
+
+### reconciliation fails halfway
+
+planned behavior: write decisions and exceptions in one database transaction.
+retry using the same run identity. do not expose a partial run to close control.
+
+### optional AI is unavailable
+
+nothing changes in Phase 1. ingestion, deterministic matching, exceptions, and
+close must not depend on it.
+
+## tradeoffs
+
+| choice | what we gain | what we give up |
+| --- | --- | --- |
+| modular monolith | one snapshot and simpler local runs | modules cannot scale independently yet |
+| CSV feeds | easy generation and inspection | weaker typing than Parquet or an API schema |
+| filesystem evidence | exact bytes and simple replay | no built-in retention or multi-host access |
+| zero amount tolerance | no hidden financial difference | harmless rounding needs an explicit future rule |
+| disjoint anomalies | clean evaluation labels | fewer multi-failure scenarios |
+| deterministic matching | explainable decisions | lower recall when references are damaged |
 
 ## open questions
 
-- what identity remains stable across partner corrections?
-- which source statuses are final?
+- do partner files really share one contract, or do we need one adapter per partner and source?
+- what source identity is stable across corrected deliveries?
+- should a quarantined non-financial field always block close?
+- which statuses are final for each source?
+- can an approved unresolved item stop blocking close, and at what value?
 - what makes an override material?
-- which unresolved items can be approved without blocking close?
-- what is the retention period for source evidence and audit history?
+- how long must raw evidence and audit history be retained?
+- do we need one close decision per batch, partner, business date, or all three?
+
+these need answers before their behavior is coded. until then, assumptions stay
+explicit and configurable.
