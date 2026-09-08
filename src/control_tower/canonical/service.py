@@ -18,6 +18,10 @@ class CanonicalizationResult:
     replayed_count: int
 
 
+class CanonicalizationError(ValueError):
+    pass
+
+
 def _read_evidence_row(
     source_location: str, cache: dict[Path, list[dict[str, str]]]
 ) -> dict[str, str]:
@@ -46,21 +50,27 @@ def canonicalize(
     writes: list[CanonicalWrite] = []
     artifact_rows: dict[Path, list[dict[str, str]]] = {}
     for candidate in ingestion_registry.canonical_candidates():
-        provenance = SourceProvenance(
-            source_version_id=candidate.source_version_id,
-            payload_hash=candidate.payload_hash,
-            artifact_hash=candidate.artifact_hash,
-            source_location=candidate.source_location,
-        )
-        writes.append(
-            CanonicalWrite(
-                adapt(
-                    candidate.source,
-                    _read_evidence_row(candidate.source_location, artifact_rows),
-                    provenance,
+        try:
+            provenance = SourceProvenance(
+                source_version_id=candidate.source_version_id,
+                payload_hash=candidate.payload_hash,
+                artifact_hash=candidate.artifact_hash,
+                source_location=candidate.source_location,
+            )
+            writes.append(
+                CanonicalWrite(
+                    adapt(
+                        candidate.source,
+                        _read_evidence_row(candidate.source_location, artifact_rows),
+                        provenance,
+                    )
                 )
             )
-        )
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            raise CanonicalizationError(
+                f"cannot canonicalize {candidate.source} version "
+                f"{candidate.source_version_id}: {error}"
+            ) from error
     outcomes = Counter(repository.save_many(writes))
     return CanonicalizationResult(
         outcomes[CanonicalWriteOutcome.CREATED],

@@ -1,4 +1,9 @@
+from datetime import date, datetime, timezone
+
+import pytest
+
 from control_tower.canonical import (
+    CanonicalContractError,
     CanonicalStatus,
     EventType,
     SourceProvenance,
@@ -120,10 +125,40 @@ def test_rejects_naive_source_timestamp() -> None:
         "received_timestamp": "2026-09-01T10:02:00+05:30",
     }
 
-    with pytest.raises(ValueError, match="instruction_timestamp must include"):
+    with pytest.raises(
+        CanonicalContractError, match="instruction_timestamp must include"
+    ):
         adapt("originator", row, PROVENANCE)
 
 
-from datetime import date, datetime, timezone
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("amount_paise", "0", "amount_paise must be positive"),
+        ("currency", "USD", "currency must be INR"),
+        ("status", "UNKNOWN", "cannot adapt originator"),
+        ("instruction_id", "", "source_record_id"),
+    ],
+)
+def test_rejects_values_outside_the_canonical_contract(
+    field: str, value: str, message: str
+) -> None:
+    row = {
+        "instruction_id": "instruction-1",
+        "loan_reference": "partner-loan-1",
+        "customer_surrogate_id": "customer-1",
+        "partner_code": "ARUNA",
+        "instruction_timestamp": "2026-09-01T10:00:00+05:30",
+        "amount_paise": "125000",
+        "currency": "INR",
+        "status": "APPROVED",
+        "batch_id": "batch-1",
+        "received_timestamp": "2026-09-01T10:02:00+05:30",
+    }
+    row[field] = value
+
+    with pytest.raises(CanonicalContractError, match=message):
+        adapt("originator", row, PROVENANCE)
+
 
 import pytest

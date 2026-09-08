@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import ClassVar
 
 from .models import (
+    CanonicalContractError,
     CanonicalEvent,
     CanonicalStatus,
     EventType,
@@ -156,4 +157,10 @@ def adapt(
     row: dict[str, str],
     provenance: SourceProvenance,
 ) -> CanonicalEvent:
-    return ADAPTERS[SourceSystem(source)].adapt(row, provenance)
+    try:
+        adapter = ADAPTERS[SourceSystem(source)]
+        return adapter.adapt(row, provenance)
+    except CanonicalContractError:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise CanonicalContractError(f"cannot adapt {source}: {error}") from error

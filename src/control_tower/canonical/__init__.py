@@ -1,5 +1,6 @@
 from .adapters import BankAdapter, LmsAdapter, OriginatorAdapter, adapt
 from .models import (
+    CanonicalContractError,
     CanonicalEvent,
     CanonicalStatus,
     EventType,
@@ -11,15 +12,17 @@ from .repository import (
     CanonicalWrite,
     CanonicalWriteOutcome,
 )
-from .service import CanonicalizationResult, canonicalize
+from .service import CanonicalizationError, CanonicalizationResult, canonicalize
 
 __all__ = [
     "BankAdapter",
+    "CanonicalContractError",
     "CanonicalEvent",
     "CanonicalRepository",
     "CanonicalStatus",
     "CanonicalWrite",
     "CanonicalWriteOutcome",
+    "CanonicalizationError",
     "CanonicalizationResult",
     "EventType",
     "LmsAdapter",
