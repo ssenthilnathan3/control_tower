@@ -9,6 +9,7 @@ from control_tower.canonical import (
     CanonicalWrite,
     CanonicalWriteOutcome,
     EventType,
+    SourceProvenance,
     SourceSystem,
 )
 
@@ -16,6 +17,12 @@ from control_tower.canonical import (
 def _event(record_id: str) -> CanonicalEvent:
     source_timestamp = datetime.fromisoformat("2026-09-01T10:00:00+05:30")
     return CanonicalEvent(
+        provenance=SourceProvenance(
+            int(record_id.rsplit("-", 1)[1]),
+            "a" * 64,
+            "b" * 64,
+            f"source.csv#line={record_id.rsplit('-', 1)[1]}",
+        ),
         source_system=SourceSystem.ORIGINATOR,
         event_type=EventType.INSTRUCTION,
         source_record_id=record_id,
@@ -40,7 +47,7 @@ def _event(record_id: str) -> CanonicalEvent:
 def test_persists_canonical_records_idempotently(tmp_path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'canonical.db'}")
     repository = CanonicalRepository(engine)
-    writes = [CanonicalWrite(10, _event("instruction-1"))]
+    writes = [CanonicalWrite(_event("instruction-1"))]
 
     assert repository.save_many(writes) == [CanonicalWriteOutcome.CREATED]
     assert repository.save_many(writes) == [CanonicalWriteOutcome.REPLAY]
@@ -51,8 +58,8 @@ def test_persists_multiple_source_versions_in_one_batch(tmp_path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'canonical.db'}")
     repository = CanonicalRepository(engine)
     writes = [
-        CanonicalWrite(10, _event("instruction-1")),
-        CanonicalWrite(11, _event("instruction-2")),
+        CanonicalWrite(_event("instruction-1")),
+        CanonicalWrite(_event("instruction-2")),
     ]
 
     assert repository.save_many(writes) == [

@@ -25,7 +25,16 @@ class CanonicalStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class SourceProvenance:
+    source_version_id: int
+    payload_hash: str
+    artifact_hash: str
+    source_location: str
+
+
+@dataclass(frozen=True)
 class CanonicalEvent:
+    provenance: SourceProvenance
     source_system: SourceSystem
     event_type: EventType
     source_record_id: str

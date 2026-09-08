@@ -89,6 +89,15 @@ class IdentitySnapshot:
     payload_hashes: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class CanonicalCandidate:
+    source_version_id: int
+    source: str
+    payload_hash: str
+    artifact_hash: str
+    source_location: str
+
+
 class IngestionRegistry:
     def __init__(self, database_url: str):
         self.engine = create_engine(database_url)
@@ -232,6 +241,28 @@ class IngestionRegistry:
             return IdentitySnapshot(
                 identity.state, tuple(item.payload_hash for item in versions)
             )
+
+    def canonical_candidates(self) -> list[CanonicalCandidate]:
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(SourceVersion, SourceIdentity.source)
+                .join(SourceVersion.identity)
+                .where(
+                    SourceIdentity.state == "ACCEPTED",
+                    SourceVersion.validation_state == "ACCEPTED",
+                )
+                .order_by(SourceVersion.id)
+            ).all()
+            return [
+                CanonicalCandidate(
+                    version.id,
+                    source,
+                    version.payload_hash,
+                    version.artifact_hash,
+                    version.source_location,
+                )
+                for version, source in rows
+            ]
 
     @staticmethod
     def _version(record: Registration, version: int, now: datetime) -> SourceVersion:

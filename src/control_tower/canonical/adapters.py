@@ -4,7 +4,13 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import ClassVar
 
-from .models import CanonicalEvent, CanonicalStatus, EventType, SourceSystem
+from .models import (
+    CanonicalEvent,
+    CanonicalStatus,
+    EventType,
+    SourceProvenance,
+    SourceSystem,
+)
 
 
 class SourceAdapter(ABC):
@@ -16,7 +22,9 @@ class SourceAdapter(ABC):
     status_map: ClassVar[dict[str, CanonicalStatus]]
 
     @abstractmethod
-    def adapt(self, row: dict[str, str]) -> CanonicalEvent:
+    def adapt(
+        self, row: dict[str, str], provenance: SourceProvenance
+    ) -> CanonicalEvent:
         pass
 
     def _common(self, row: dict[str, str]) -> dict[str, object]:
@@ -49,8 +57,11 @@ class OriginatorAdapter(SourceAdapter):
         "CANCELLED": CanonicalStatus.CANCELLED,
     }
 
-    def adapt(self, row: dict[str, str]) -> CanonicalEvent:
+    def adapt(
+        self, row: dict[str, str], provenance: SourceProvenance
+    ) -> CanonicalEvent:
         return CanonicalEvent(
+            provenance=provenance,
             **self._common(row),
             source_record_id=row["instruction_id"],
             business_event_id=row["instruction_id"],
@@ -75,8 +86,11 @@ class LmsAdapter(SourceAdapter):
         "REVERSED": CanonicalStatus.REVERSED,
     }
 
-    def adapt(self, row: dict[str, str]) -> CanonicalEvent:
+    def adapt(
+        self, row: dict[str, str], provenance: SourceProvenance
+    ) -> CanonicalEvent:
         return CanonicalEvent(
+            provenance=provenance,
             **self._common(row),
             source_record_id=row["booking_id"],
             business_event_id=row["booking_id"],
@@ -101,8 +115,11 @@ class BankAdapter(SourceAdapter):
         "REVERSED": CanonicalStatus.REVERSED,
     }
 
-    def adapt(self, row: dict[str, str]) -> CanonicalEvent:
+    def adapt(
+        self, row: dict[str, str], provenance: SourceProvenance
+    ) -> CanonicalEvent:
         return CanonicalEvent(
+            provenance=provenance,
             **self._common(row),
             source_record_id=row["transaction_reference"],
             business_event_id=row["transaction_reference"],
@@ -121,5 +138,9 @@ ADAPTERS: dict[SourceSystem, SourceAdapter] = {
 }
 
 
-def adapt(source: SourceSystem | str, row: dict[str, str]) -> CanonicalEvent:
-    return ADAPTERS[SourceSystem(source)].adapt(row)
+def adapt(
+    source: SourceSystem | str,
+    row: dict[str, str],
+    provenance: SourceProvenance,
+) -> CanonicalEvent:
+    return ADAPTERS[SourceSystem(source)].adapt(row, provenance)

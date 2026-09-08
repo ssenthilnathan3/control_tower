@@ -1,9 +1,12 @@
 from control_tower.canonical import (
     CanonicalStatus,
     EventType,
+    SourceProvenance,
     SourceSystem,
     adapt,
 )
+
+PROVENANCE = SourceProvenance(1, "a" * 64, "b" * 64, "source.csv#line=2")
 
 
 def test_originator_adapter_maps_instruction() -> None:
@@ -21,6 +24,7 @@ def test_originator_adapter_maps_instruction() -> None:
             "batch_id": "batch-1",
             "received_timestamp": "2026-09-01T10:02:00+05:30",
         },
+        PROVENANCE,
     )
 
     assert event.source_system is SourceSystem.ORIGINATOR
@@ -46,6 +50,7 @@ def test_lms_adapter_maps_booking() -> None:
             "batch_id": "batch-1",
             "received_timestamp": "2026-09-01T10:12:00+05:30",
         },
+        PROVENANCE,
     )
 
     assert event.source_system is SourceSystem.LMS
@@ -70,6 +75,7 @@ def test_bank_adapter_maps_settlement_and_reversal_reference() -> None:
             "batch_id": "batch-1",
             "received_timestamp": "2026-09-01T10:07:00+05:30",
         },
+        PROVENANCE,
     )
 
     assert event.source_system is SourceSystem.BANK

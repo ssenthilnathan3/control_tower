@@ -1,8 +1,14 @@
 from .models import IngestedArtifact, IngestionError, IngestionResult, QuarantinedRecord
-from .registry import IdentitySnapshot, IngestionRegistry, RegistrationOutcome
+from .registry import (
+    CanonicalCandidate,
+    IdentitySnapshot,
+    IngestionRegistry,
+    RegistrationOutcome,
+)
 from .service import ingest_generated_feeds
 
 __all__ = [
+    "CanonicalCandidate",
     "IdentitySnapshot",
     "IngestedArtifact",
     "IngestionError",

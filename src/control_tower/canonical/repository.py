@@ -37,6 +37,9 @@ class CanonicalRecord(Base):
     source_status: Mapped[str] = mapped_column(String(32))
     canonical_status: Mapped[str] = mapped_column(String(32))
     related_event_reference: Mapped[str | None] = mapped_column(String(128))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    artifact_hash: Mapped[str] = mapped_column(String(64))
+    source_location: Mapped[str] = mapped_column(String(512))
 
 
 class CanonicalWriteOutcome(str, Enum):
@@ -46,8 +49,11 @@ class CanonicalWriteOutcome(str, Enum):
 
 @dataclass(frozen=True)
 class CanonicalWrite:
-    source_version_id: int
     event: CanonicalEvent
+
+    @property
+    def source_version_id(self) -> int:
+        return self.event.provenance.source_version_id
 
 
 class CanonicalRepository:
@@ -55,9 +61,7 @@ class CanonicalRepository:
         self.engine = engine
         Base.metadata.create_all(engine)
 
-    def save_many(
-        self, writes: list[CanonicalWrite]
-    ) -> list[CanonicalWriteOutcome]:
+    def save_many(self, writes: list[CanonicalWrite]) -> list[CanonicalWriteOutcome]:
         if not writes:
             return []
         version_ids = [write.source_version_id for write in writes]
@@ -81,7 +85,9 @@ class CanonicalRepository:
 
     def count(self) -> int:
         with Session(self.engine) as session:
-            return session.scalar(select(func.count()).select_from(CanonicalRecord)) or 0
+            return (
+                session.scalar(select(func.count()).select_from(CanonicalRecord)) or 0
+            )
 
     @staticmethod
     def _record(write: CanonicalWrite) -> CanonicalRecord:
@@ -106,4 +112,7 @@ class CanonicalRepository:
             source_status=event.source_status,
             canonical_status=event.canonical_status.value,
             related_event_reference=event.related_event_reference,
+            payload_hash=event.provenance.payload_hash,
+            artifact_hash=event.provenance.artifact_hash,
+            source_location=event.provenance.source_location,
         )
