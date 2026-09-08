@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections import Counter
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from .models import (
     IngestionResult,
     QuarantinedRecord,
 )
+from .registry import IngestionRegistry, Registration, RegistrationOutcome
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -175,7 +177,54 @@ def _preserve_evidence(
     return destination, tuple(quarantined)
 
 
-def ingest_generated_feeds(input_dir: Path, evidence_root: Path) -> IngestionResult:
+def _register_rows(
+    registry: IngestionRegistry,
+    source: str,
+    artifact_hash: str,
+    evidence_path: Path,
+    rows: list[dict[str, str]],
+    contract: SourceContract,
+    validation_errors: list[tuple[str, ...]],
+    raw: bytes,
+) -> tuple[Counter[RegistrationOutcome], int]:
+    physical_lines = raw.splitlines(keepends=True)[1:]
+    registrations: list[Registration] = []
+    for line_number, (row, errors, raw_line) in enumerate(
+        zip(rows, validation_errors, physical_lines), start=2
+    ):
+        record_id = (
+            row.get(contract.record_id_field, "") or f"<missing>@line:{line_number}"
+        )
+        registrations.append(
+            Registration(
+                source=source,
+                batch_id=row.get("batch_id", ""),
+                record_id=record_id,
+                partner_code=row.get("partner_code", ""),
+                payload_hash=_sha256_bytes(raw_line),
+                artifact_hash=artifact_hash,
+                source_location=f"{evidence_path / 'source.csv'}#line={line_number}",
+                validation_state="QUARANTINED" if errors else "ACCEPTED",
+            )
+        )
+    row_outcomes = registry.register_many(registrations)
+    eligible_count = sum(
+        not errors and outcome != RegistrationOutcome.CONFLICT
+        for errors, outcome in zip(validation_errors, row_outcomes)
+    )
+    return Counter(row_outcomes), eligible_count
+
+
+def ingest_generated_feeds(
+    input_dir: Path,
+    evidence_root: Path,
+    database_url: str | None = None,
+) -> IngestionResult:
+    registry = (
+        IngestionRegistry(database_url)
+        if database_url
+        else IngestionRegistry.local(evidence_root)
+    )
     artifacts: list[IngestedArtifact] = []
     for source, contract in CONTRACTS.items():
         feed_path = input_dir / "feeds" / f"{source}.csv"
@@ -199,6 +248,16 @@ def ingest_generated_feeds(input_dir: Path, evidence_root: Path) -> IngestionRes
         artifact_hash, verified_total = _verify_controls(
             source, raw, rows, contract, manifest
         )
+        outcomes, eligible_count = _register_rows(
+            registry,
+            source,
+            artifact_hash,
+            evidence_path,
+            rows,
+            contract,
+            validation_errors,
+            raw,
+        )
         artifacts.append(
             IngestedArtifact(
                 source,
@@ -208,6 +267,10 @@ def ingest_generated_feeds(input_dir: Path, evidence_root: Path) -> IngestionRes
                 evidence_path,
                 len(rows) - len(quarantined),
                 quarantined,
+                eligible_count,
+                outcomes[RegistrationOutcome.NEW],
+                outcomes[RegistrationOutcome.REPLAY],
+                outcomes[RegistrationOutcome.CONFLICT],
             )
         )
     return IngestionResult(tuple(artifacts))

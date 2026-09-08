@@ -1,12 +1,18 @@
 import csv
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from control_tower.generator import generate
-from control_tower.ingestion import IngestionError, ingest_generated_feeds
+from control_tower.ingestion import (
+    IngestionError,
+    IngestionRegistry,
+    ingest_generated_feeds,
+)
+from control_tower.ingestion.registry import Registration, RegistrationOutcome
 
 CONFIG = Path("config/generator.json")
 
@@ -84,3 +90,80 @@ def test_rejects_manifest_control_mismatch(tmp_path: Path, manifest_field: str) 
     assert (
         tmp_path / "evidence" / "artifacts" / "bank" / artifact_hash / "source.csv"
     ).exists()
+
+
+def test_replay_is_a_persisted_no_op(tmp_path: Path) -> None:
+    generated = generate(CONFIG, tmp_path / "generated")
+    evidence = tmp_path / "evidence"
+
+    first = ingest_generated_feeds(generated.output_dir, evidence)
+    second = ingest_generated_feeds(generated.output_dir, evidence)
+
+    assert first.new_row_count == first.accepted_row_count
+    assert first.replayed_row_count == 0
+    assert second.new_row_count == 0
+    assert second.replayed_row_count == first.accepted_row_count
+    assert second.conflict_row_count == 0
+
+
+def test_changed_payload_is_versioned_and_blocks_identity(tmp_path: Path) -> None:
+    generated = generate(CONFIG, tmp_path / "generated")
+    evidence = tmp_path / "evidence"
+    ingest_generated_feeds(generated.output_dir, evidence)
+
+    feed = generated.output_dir / "feeds/originator.csv"
+    rows = list(csv.DictReader(feed.read_text().splitlines()))
+    changed = rows[0]
+    changed["status"] = "REJECTED"
+    with feed.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=changed, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    manifest_path = generated.output_dir / "manifests/originator.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["file_sha256"] = hashlib.sha256(feed.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = ingest_generated_feeds(generated.output_dir, evidence)
+    originator = next(item for item in result.artifacts if item.source == "originator")
+    assert originator.conflict_count == 1
+    assert originator.eligible_count == originator.accepted_count - 1
+
+    registry = IngestionRegistry.local(evidence)
+    identity = registry.get_identity(
+        "originator", changed["batch_id"], changed["instruction_id"]
+    )
+    assert identity is not None
+    assert identity.state == "CONFLICT"
+    assert len(identity.payload_hashes) == 2
+    assert identity.payload_hashes[0] != identity.payload_hashes[1]
+
+    replay = ingest_generated_feeds(generated.output_dir, evidence)
+    assert replay.conflict_row_count == 1
+
+
+def test_concurrent_registration_creates_one_identity(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'registry.db'}"
+    first = IngestionRegistry(database_url)
+    second = IngestionRegistry(database_url)
+    record = Registration(
+        source="bank",
+        batch_id="batch-1",
+        record_id="tx-1",
+        partner_code="ARUNA",
+        payload_hash="a" * 64,
+        artifact_hash="b" * 64,
+        source_location="source.csv#line=2",
+        validation_state="ACCEPTED",
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = set(
+            executor.map(lambda registry: registry.register(record), (first, second))
+        )
+
+    assert outcomes == {RegistrationOutcome.NEW, RegistrationOutcome.REPLAY}
+    identity = first.get_identity("bank", "batch-1", "tx-1")
+    assert identity is not None
+    assert identity.state == "ACCEPTED"
+    assert identity.payload_hashes == ("a" * 64,)

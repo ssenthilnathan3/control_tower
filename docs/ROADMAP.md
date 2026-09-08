@@ -46,7 +46,7 @@ done when:
 - running the same input twice does not create another business effect
 - a changed payload under an existing identity is visible as a conflict
 
-status: quarantine is done. persisted idempotency is next.
+status: done. replay, changed payload, restart, and concurrent registration are tested.
 
 ## 3. normalize source records
 

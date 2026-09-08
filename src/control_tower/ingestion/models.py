@@ -25,6 +25,10 @@ class IngestedArtifact:
     evidence_path: Path
     accepted_count: int
     quarantined_records: tuple[QuarantinedRecord, ...]
+    eligible_count: int
+    new_count: int = 0
+    replayed_count: int = 0
+    conflict_count: int = 0
 
     @property
     def quarantined_count(self) -> int:
@@ -42,3 +46,15 @@ class IngestionResult:
     @property
     def quarantined_row_count(self) -> int:
         return sum(artifact.quarantined_count for artifact in self.artifacts)
+
+    @property
+    def new_row_count(self) -> int:
+        return sum(artifact.new_count for artifact in self.artifacts)
+
+    @property
+    def replayed_row_count(self) -> int:
+        return sum(artifact.replayed_count for artifact in self.artifacts)
+
+    @property
+    def conflict_row_count(self) -> int:
+        return sum(artifact.conflict_count for artifact in self.artifacts)

@@ -145,17 +145,18 @@ the directory is built under a temporary name and published with `os.replace`.
 a reader either sees the complete artifact or nothing. if another process has
 already published the same hash, the second write reuses it.
 
-this is not complete ingestion idempotency yet. content addressing handles the
-same bytes, but we still need a persisted source identity such as
-`(source, batch_id, source_record_id)`. same identity plus same payload should be
-a no-op. same identity plus different payload should be a conflict.
+`ingestion.registry.IngestionRegistry` stores the stable identity as
+`(source, batch_id, source_record_id)`. same identity plus same payload is a
+replay. same identity plus different payload appends a version and moves the
+identity to `CONFLICT`. replaying either version stays blocked.
 
 ## state
 
-right now raw evidence lives on the filesystem. generator truth also lives on
-the filesystem, under a separate directory.
+raw evidence and generator truth live on the filesystem. operational ingestion
+state lives in a relational database through SQLAlchemy. local runs use
+`evidence/ingestion.db`, which survives process restarts.
 
-PostgreSQL will own operational state when canonicalization starts:
+PostgreSQL is the deployment target when canonicalization starts. it will own:
 
 - ingestion registrations and identity conflicts
 - canonical events
@@ -233,13 +234,14 @@ directories are never published as artifact hashes.
 
 ### the same artifact arrives twice
 
-reuse the content-addressed evidence. persisted ingestion idempotency is still
-needed before this is a complete no-op at the business level.
+reuse the content-addressed evidence. the registry returns `REPLAY`, so no new
+source identity or payload version is created.
 
 ### the same source identity has different bytes
 
-planned behavior: keep both artifacts, mark an identity conflict, and block the
-record from matching. do not overwrite the first version.
+keep both artifacts, append the second payload as a new version, and mark the
+identity `CONFLICT`. replaying either version remains conflicted. do not
+overwrite the first version.
 
 ### one row is malformed
 
