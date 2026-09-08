@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 
 from control_tower.canonical import (
     CanonicalEvent,
@@ -68,3 +68,14 @@ def test_persists_multiple_source_versions_in_one_batch(tmp_path) -> None:
         CanonicalWriteOutcome.CREATED,
     ]
     assert repository.count() == 2
+
+
+def test_canonical_record_keeps_source_version_foreign_key(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'canonical.db'}")
+    CanonicalRepository(engine)
+
+    foreign_keys = inspect(engine).get_foreign_keys("canonical_records")
+
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0]["referred_table"] == "source_versions"
+    assert foreign_keys[0]["referred_columns"] == ["id"]

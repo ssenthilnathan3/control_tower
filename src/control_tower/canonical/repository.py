@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from enum import Enum
 
 from sqlalchemy import (
     Date,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     UniqueConstraint,
@@ -27,7 +29,9 @@ class CanonicalRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source_version_id: Mapped[int] = mapped_column(Integer)
+    source_version_id: Mapped[int] = mapped_column(
+        ForeignKey("source_versions.id", ondelete="RESTRICT")
+    )
     source_system: Mapped[str] = mapped_column(String(32))
     event_type: Mapped[str] = mapped_column(String(32))
     source_record_id: Mapped[str] = mapped_column(String(128))
@@ -38,10 +42,10 @@ class CanonicalRecord(Base):
     loan_id: Mapped[str | None] = mapped_column(String(128))
     customer_surrogate_id: Mapped[str | None] = mapped_column(String(128))
     partner_loan_reference: Mapped[str | None] = mapped_column(String(128))
-    source_timestamp: Mapped[object] = mapped_column(DateTime(timezone=True))
-    received_timestamp: Mapped[object] = mapped_column(DateTime(timezone=True))
-    reconciliation_cutoff: Mapped[object] = mapped_column(DateTime(timezone=True))
-    business_date: Mapped[object] = mapped_column(Date)
+    source_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    received_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reconciliation_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    business_date: Mapped[date] = mapped_column(Date)
     amount_paise: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3))
     source_status: Mapped[str] = mapped_column(String(32))
