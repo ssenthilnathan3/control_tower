@@ -9,6 +9,7 @@ from pathlib import Path
 from control_tower.ingestion import IngestionRegistry
 
 from .adapters import adapt
+from .config import CanonicalizationPolicy
 from .models import SourceProvenance
 from .repository import CanonicalRepository, CanonicalWrite, CanonicalWriteOutcome
 
@@ -64,6 +65,7 @@ def _read_evidence_row(
 
 def canonicalize(
     ingestion_registry: IngestionRegistry,
+    policy: CanonicalizationPolicy,
     repository: CanonicalRepository | None = None,
 ) -> CanonicalizationResult:
     repository = repository or CanonicalRepository(ingestion_registry.engine)
@@ -89,6 +91,7 @@ def canonicalize(
                             artifact_rows,
                         ),
                         provenance,
+                        policy,
                     )
                 )
             )

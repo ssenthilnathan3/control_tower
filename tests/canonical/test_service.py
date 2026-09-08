@@ -7,6 +7,7 @@ import pytest
 
 from control_tower.canonical import (
     CanonicalizationError,
+    CanonicalizationPolicy,
     CanonicalRepository,
     canonicalize,
 )
@@ -15,6 +16,7 @@ from control_tower.ingestion import IngestionRegistry, ingest_generated_feeds
 from control_tower.ingestion.registry import Registration, RegistrationOutcome
 
 CONFIG = Path("config/generator.json")
+POLICY = CanonicalizationPolicy.load(Path("config/canonicalization.json"))
 
 
 def test_normalizes_eligible_ingestion_versions_with_lineage(tmp_path: Path) -> None:
@@ -24,8 +26,8 @@ def test_normalizes_eligible_ingestion_versions_with_lineage(tmp_path: Path) -> 
     registry = IngestionRegistry.local(evidence)
     repository = CanonicalRepository(registry.engine)
 
-    first = canonicalize(registry, repository)
-    second = canonicalize(registry, repository)
+    first = canonicalize(registry, POLICY, repository)
+    second = canonicalize(registry, POLICY, repository)
 
     assert first.created_count == ingested.accepted_row_count
     assert first.replayed_count == 0
@@ -42,7 +44,7 @@ def test_rejects_evidence_changed_after_ingestion(tmp_path: Path) -> None:
     artifact.write_bytes(artifact.read_bytes().replace(b"APPROVED", b"REJECTED", 1))
 
     with pytest.raises(CanonicalizationError, match="artifact hash does not match"):
-        canonicalize(IngestionRegistry.local(evidence))
+        canonicalize(IngestionRegistry.local(evidence), POLICY)
 
 
 def _write_originator(path: Path, status: str) -> tuple[dict[str, str], str, str]:
@@ -87,7 +89,7 @@ def test_blocks_existing_canonical_record_until_conflict_is_resolved(
         "ACCEPTED",
     )
     assert registry.register(original) is RegistrationOutcome.NEW
-    assert canonicalize(registry, repository).created_count == 1
+    assert canonicalize(registry, POLICY, repository).created_count == 1
 
     changed_path = tmp_path / "changed.csv"
     _, changed_hash, changed_artifact_hash = _write_originator(changed_path, "REJECTED")
@@ -98,7 +100,7 @@ def test_blocks_existing_canonical_record_until_conflict_is_resolved(
         source_location=f"{changed_path}#line=2",
     )
     assert registry.register(changed) is RegistrationOutcome.CONFLICT
-    canonicalize(registry, repository)
+    canonicalize(registry, POLICY, repository)
     assert repository.count("ACTIVE") == 0
 
     registry.resolve_conflict(
@@ -109,7 +111,7 @@ def test_blocks_existing_canonical_record_until_conflict_is_resolved(
         actor="approver-1",
         reason="partner confirmed the corrected status",
     )
-    result = canonicalize(registry, repository)
+    result = canonicalize(registry, POLICY, repository)
     assert result.created_count == 1
     assert repository.count("ACTIVE") == 1
     assert repository.count("BLOCKED") == 1

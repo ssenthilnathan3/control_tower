@@ -1,4 +1,5 @@
 from .adapters import BankAdapter, LmsAdapter, OriginatorAdapter, adapt
+from .config import CanonicalizationPolicy
 from .models import (
     CanonicalContractError,
     CanonicalEvent,
@@ -23,6 +24,7 @@ __all__ = [
     "CanonicalWrite",
     "CanonicalWriteOutcome",
     "CanonicalizationError",
+    "CanonicalizationPolicy",
     "CanonicalizationResult",
     "EventType",
     "LmsAdapter",

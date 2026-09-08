@@ -24,11 +24,16 @@ class SourceAdapter(ABC):
 
     @abstractmethod
     def adapt(
-        self, row: dict[str, str], provenance: SourceProvenance
+        self,
+        row: dict[str, str],
+        provenance: SourceProvenance,
+        policy: CanonicalizationPolicy,
     ) -> CanonicalEvent:
         pass
 
-    def _common(self, row: dict[str, str]) -> dict[str, object]:
+    def _common(
+        self, row: dict[str, str], policy: CanonicalizationPolicy
+    ) -> dict[str, object]:
         source_local_timestamp = self._timestamp(
             row[self.timestamp_field], self.timestamp_field
         )
@@ -36,6 +41,10 @@ class SourceAdapter(ABC):
             row["received_timestamp"], "received_timestamp"
         )
         source_status = row[self.status_field]
+        business_date = source_local_timestamp.astimezone(policy.timezone).date()
+        cutoff = datetime.combine(
+            business_date, policy.cutoff_time, policy.timezone
+        ).astimezone(timezone.utc)
         return {
             "source_system": self.source_system,
             "event_type": self.event_type,
@@ -43,8 +52,8 @@ class SourceAdapter(ABC):
             "batch_id": row["batch_id"],
             "source_timestamp": source_local_timestamp.astimezone(timezone.utc),
             "received_timestamp": received_timestamp.astimezone(timezone.utc),
-            # Business date belongs to the source offset, not the UTC storage date.
-            "business_date": source_local_timestamp.date(),
+            "reconciliation_cutoff": cutoff,
+            "business_date": business_date,
             "amount_paise": int(row[self.amount_field]),
             "currency": row["currency"],
             "source_status": source_status,
@@ -72,11 +81,14 @@ class OriginatorAdapter(SourceAdapter):
     }
 
     def adapt(
-        self, row: dict[str, str], provenance: SourceProvenance
+        self,
+        row: dict[str, str],
+        provenance: SourceProvenance,
+        policy: CanonicalizationPolicy,
     ) -> CanonicalEvent:
         return CanonicalEvent(
             provenance=provenance,
-            **self._common(row),
+            **self._common(row, policy),
             source_record_id=row["instruction_id"],
             business_event_id=row["instruction_id"],
             correlation_id=row["instruction_id"],
@@ -101,11 +113,14 @@ class LmsAdapter(SourceAdapter):
     }
 
     def adapt(
-        self, row: dict[str, str], provenance: SourceProvenance
+        self,
+        row: dict[str, str],
+        provenance: SourceProvenance,
+        policy: CanonicalizationPolicy,
     ) -> CanonicalEvent:
         return CanonicalEvent(
             provenance=provenance,
-            **self._common(row),
+            **self._common(row, policy),
             source_record_id=row["booking_id"],
             business_event_id=row["booking_id"],
             correlation_id=row["partner_loan_reference"],
@@ -130,11 +145,14 @@ class BankAdapter(SourceAdapter):
     }
 
     def adapt(
-        self, row: dict[str, str], provenance: SourceProvenance
+        self,
+        row: dict[str, str],
+        provenance: SourceProvenance,
+        policy: CanonicalizationPolicy,
     ) -> CanonicalEvent:
         return CanonicalEvent(
             provenance=provenance,
-            **self._common(row),
+            **self._common(row, policy),
             source_record_id=row["transaction_reference"],
             business_event_id=row["transaction_reference"],
             correlation_id=row["linked_instruction_reference"],
@@ -156,11 +174,15 @@ def adapt(
     source: SourceSystem | str,
     row: dict[str, str],
     provenance: SourceProvenance,
+    policy: CanonicalizationPolicy,
 ) -> CanonicalEvent:
     try:
         adapter = ADAPTERS[SourceSystem(source)]
-        return adapter.adapt(row, provenance)
+        return adapter.adapt(row, provenance, policy)
     except CanonicalContractError:
         raise
     except (KeyError, TypeError, ValueError) as error:
         raise CanonicalContractError(f"cannot adapt {source}: {error}") from error
+
+
+from .config import CanonicalizationPolicy

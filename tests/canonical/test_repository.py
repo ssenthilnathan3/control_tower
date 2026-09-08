@@ -35,6 +35,7 @@ def _event(record_id: str) -> CanonicalEvent:
         partner_loan_reference="partner-loan-1",
         source_timestamp=source_timestamp,
         received_timestamp=datetime.fromisoformat("2026-09-01T10:02:00+05:30"),
+        reconciliation_cutoff=datetime.fromisoformat("2026-09-01T18:00:00+05:30"),
         business_date=date(2026, 9, 1),
         amount_paise=125000,
         currency="INR",

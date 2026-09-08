@@ -1,9 +1,11 @@
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from control_tower.canonical import (
     CanonicalContractError,
+    CanonicalizationPolicy,
     CanonicalStatus,
     EventType,
     SourceProvenance,
@@ -12,6 +14,7 @@ from control_tower.canonical import (
 )
 
 PROVENANCE = SourceProvenance(1, "a" * 64, "b" * 64, "source.csv#line=2")
+POLICY = CanonicalizationPolicy.load(Path("config/canonicalization.json"))
 
 
 def test_originator_adapter_maps_instruction() -> None:
@@ -30,6 +33,7 @@ def test_originator_adapter_maps_instruction() -> None:
             "received_timestamp": "2026-09-01T10:02:00+05:30",
         },
         PROVENANCE,
+        POLICY,
     )
 
     assert event.source_system is SourceSystem.ORIGINATOR
@@ -39,6 +43,9 @@ def test_originator_adapter_maps_instruction() -> None:
     assert event.partner_loan_reference == "partner-loan-1"
     assert event.amount_paise == 125000
     assert event.source_timestamp == datetime(2026, 9, 1, 4, 30, tzinfo=timezone.utc)
+    assert event.reconciliation_cutoff == datetime(
+        2026, 9, 1, 12, 30, tzinfo=timezone.utc
+    )
 
 
 def test_lms_adapter_maps_booking() -> None:
@@ -57,6 +64,7 @@ def test_lms_adapter_maps_booking() -> None:
             "received_timestamp": "2026-09-01T10:12:00+05:30",
         },
         PROVENANCE,
+        POLICY,
     )
 
     assert event.source_system is SourceSystem.LMS
@@ -82,6 +90,7 @@ def test_bank_adapter_maps_settlement_and_reversal_reference() -> None:
             "received_timestamp": "2026-09-01T10:07:00+05:30",
         },
         PROVENANCE,
+        POLICY,
     )
 
     assert event.source_system is SourceSystem.BANK
@@ -105,7 +114,7 @@ def test_keeps_source_business_date_when_utc_date_is_previous_day() -> None:
         "received_timestamp": "2026-09-01T01:02:00+05:30",
     }
 
-    event = adapt("originator", row, PROVENANCE)
+    event = adapt("originator", row, PROVENANCE, POLICY)
 
     assert event.source_timestamp.date() == date(2026, 8, 31)
     assert event.business_date == date(2026, 9, 1)
@@ -128,7 +137,7 @@ def test_rejects_naive_source_timestamp() -> None:
     with pytest.raises(
         CanonicalContractError, match="instruction_timestamp must include"
     ):
-        adapt("originator", row, PROVENANCE)
+        adapt("originator", row, PROVENANCE, POLICY)
 
 
 @pytest.mark.parametrize(
@@ -158,7 +167,7 @@ def test_rejects_values_outside_the_canonical_contract(
     row[field] = value
 
     with pytest.raises(CanonicalContractError, match=message):
-        adapt("originator", row, PROVENANCE)
+        adapt("originator", row, PROVENANCE, POLICY)
 
 
 import pytest

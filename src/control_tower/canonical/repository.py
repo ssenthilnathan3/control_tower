@@ -40,6 +40,7 @@ class CanonicalRecord(Base):
     partner_loan_reference: Mapped[str | None] = mapped_column(String(128))
     source_timestamp: Mapped[object] = mapped_column(DateTime(timezone=True))
     received_timestamp: Mapped[object] = mapped_column(DateTime(timezone=True))
+    reconciliation_cutoff: Mapped[object] = mapped_column(DateTime(timezone=True))
     business_date: Mapped[object] = mapped_column(Date)
     amount_paise: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3))
@@ -140,6 +141,7 @@ class CanonicalRepository:
             partner_loan_reference=event.partner_loan_reference,
             source_timestamp=event.source_timestamp,
             received_timestamp=event.received_timestamp,
+            reconciliation_cutoff=event.reconciliation_cutoff,
             business_date=event.business_date,
             amount_paise=event.amount_paise,
             currency=event.currency,

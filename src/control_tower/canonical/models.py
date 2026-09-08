@@ -64,6 +64,7 @@ class CanonicalEvent:
     partner_loan_reference: str | None
     source_timestamp: datetime
     received_timestamp: datetime
+    reconciliation_cutoff: datetime
     business_date: date
     amount_paise: int
     currency: str
@@ -90,6 +91,7 @@ class CanonicalEvent:
         for field, value in (
             ("source_timestamp", self.source_timestamp),
             ("received_timestamp", self.received_timestamp),
+            ("reconciliation_cutoff", self.reconciliation_cutoff),
         ):
             if value.tzinfo is None or value.utcoffset() is None:
                 raise CanonicalContractError(f"{field} must include a timezone")
