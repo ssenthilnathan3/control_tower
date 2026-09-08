@@ -3,10 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, Integer, String, UniqueConstraint, func, select
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    select,
+    update,
+)
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from control_tower.ingestion.registry import Base
+from control_tower.ingestion.registry import Base, SourceIdentity, SourceVersion
 
 from .models import CanonicalEvent
 
@@ -40,6 +49,7 @@ class CanonicalRecord(Base):
     payload_hash: Mapped[str] = mapped_column(String(64))
     artifact_hash: Mapped[str] = mapped_column(String(64))
     source_location: Mapped[str] = mapped_column(String(512))
+    record_state: Mapped[str] = mapped_column(String(32), default="ACTIVE")
 
 
 class CanonicalWriteOutcome(str, Enum):
@@ -66,28 +76,52 @@ class CanonicalRepository:
             return []
         version_ids = [write.source_version_id for write in writes]
         with Session(self.engine) as session, session.begin():
-            existing = set(
-                session.scalars(
-                    select(CanonicalRecord.source_version_id).where(
+            existing = {
+                record.source_version_id: record
+                for record in session.scalars(
+                    select(CanonicalRecord).where(
                         CanonicalRecord.source_version_id.in_(version_ids)
                     )
                 )
-            )
+            }
             outcomes: list[CanonicalWriteOutcome] = []
             for write in writes:
                 if write.source_version_id in existing:
+                    existing[write.source_version_id].record_state = "ACTIVE"
                     outcomes.append(CanonicalWriteOutcome.REPLAY)
                     continue
-                session.add(self._record(write))
-                existing.add(write.source_version_id)
+                record = self._record(write)
+                session.add(record)
+                existing[write.source_version_id] = record
                 outcomes.append(CanonicalWriteOutcome.CREATED)
             return outcomes
 
-    def count(self) -> int:
-        with Session(self.engine) as session:
-            return (
-                session.scalar(select(func.count()).select_from(CanonicalRecord)) or 0
+    def sync_eligibility(self) -> None:
+        with Session(self.engine) as session, session.begin():
+            eligible = (
+                select(SourceVersion.id)
+                .join(SourceVersion.identity)
+                .where(
+                    SourceIdentity.state == "ACCEPTED",
+                    SourceVersion.validation_state == "ACCEPTED",
+                    SourceVersion.is_selected.is_(True),
+                )
             )
+            session.execute(update(CanonicalRecord).values(record_state="BLOCKED"))
+            session.execute(
+                update(CanonicalRecord)
+                .where(CanonicalRecord.source_version_id.in_(eligible))
+                .values(record_state="ACTIVE")
+            )
+
+    def count(self, record_state: str | None = None) -> int:
+        with Session(self.engine) as session:
+            statement = select(func.count()).select_from(CanonicalRecord)
+            if record_state:
+                statement = statement.where(
+                    CanonicalRecord.record_state == record_state
+                )
+            return session.scalar(statement) or 0
 
     @staticmethod
     def _record(write: CanonicalWrite) -> CanonicalRecord:
@@ -115,4 +149,5 @@ class CanonicalRepository:
             payload_hash=event.provenance.payload_hash,
             artifact_hash=event.provenance.artifact_hash,
             source_location=event.provenance.source_location,
+            record_state="ACTIVE",
         )

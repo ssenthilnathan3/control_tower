@@ -1,8 +1,12 @@
+import csv
+import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 from control_tower.canonical import CanonicalRepository, canonicalize
 from control_tower.generator import generate
 from control_tower.ingestion import IngestionRegistry, ingest_generated_feeds
+from control_tower.ingestion.registry import Registration, RegistrationOutcome
 
 CONFIG = Path("config/generator.json")
 
@@ -22,3 +26,72 @@ def test_normalizes_eligible_ingestion_versions_with_lineage(tmp_path: Path) -> 
     assert second.created_count == 0
     assert second.replayed_count == ingested.accepted_row_count
     assert repository.count() == ingested.accepted_row_count
+
+
+def _write_originator(path: Path, status: str) -> tuple[dict[str, str], str]:
+    row = {
+        "instruction_id": "instruction-1",
+        "loan_reference": "partner-loan-1",
+        "customer_surrogate_id": "customer-1",
+        "partner_code": "ARUNA",
+        "instruction_timestamp": "2026-09-01T10:00:00+05:30",
+        "amount_paise": "125000",
+        "currency": "INR",
+        "status": status,
+        "batch_id": "batch-1",
+        "received_timestamp": "2026-09-01T10:02:00+05:30",
+    }
+    with path.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=row, lineterminator="\n")
+        writer.writeheader()
+        writer.writerow(row)
+    payload_hash = hashlib.sha256(
+        path.read_bytes().splitlines(keepends=True)[1]
+    ).hexdigest()
+    return row, payload_hash
+
+
+def test_blocks_existing_canonical_record_until_conflict_is_resolved(
+    tmp_path: Path,
+) -> None:
+    registry = IngestionRegistry.local(tmp_path)
+    repository = CanonicalRepository(registry.engine)
+    original_path = tmp_path / "original.csv"
+    row, original_hash = _write_originator(original_path, "APPROVED")
+    original = Registration(
+        "originator",
+        row["batch_id"],
+        row["instruction_id"],
+        row["partner_code"],
+        original_hash,
+        "a" * 64,
+        f"{original_path}#line=2",
+        "ACCEPTED",
+    )
+    assert registry.register(original) is RegistrationOutcome.NEW
+    assert canonicalize(registry, repository).created_count == 1
+
+    changed_path = tmp_path / "changed.csv"
+    _, changed_hash = _write_originator(changed_path, "REJECTED")
+    changed = replace(
+        original,
+        payload_hash=changed_hash,
+        artifact_hash="b" * 64,
+        source_location=f"{changed_path}#line=2",
+    )
+    assert registry.register(changed) is RegistrationOutcome.CONFLICT
+    canonicalize(registry, repository)
+    assert repository.count("ACTIVE") == 0
+
+    registry.resolve_conflict(
+        "originator",
+        row["batch_id"],
+        row["instruction_id"],
+        changed_hash,
+        actor="approver-1",
+        reason="partner confirmed the corrected status",
+    )
+    result = canonicalize(registry, repository)
+    assert result.created_count == 1
+    assert repository.count("ACTIVE") == 1
+    assert repository.count("BLOCKED") == 1

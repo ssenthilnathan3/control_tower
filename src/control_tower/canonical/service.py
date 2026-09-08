@@ -42,6 +42,7 @@ def canonicalize(
     repository: CanonicalRepository | None = None,
 ) -> CanonicalizationResult:
     repository = repository or CanonicalRepository(ingestion_registry.engine)
+    repository.sync_eligibility()
     writes: list[CanonicalWrite] = []
     artifact_rows: dict[Path, list[dict[str, str]]] = {}
     for candidate in ingestion_registry.canonical_candidates():

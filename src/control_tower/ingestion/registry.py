@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -61,6 +62,7 @@ class SourceVersion(Base):
     artifact_hash: Mapped[str] = mapped_column(String(64))
     source_location: Mapped[str] = mapped_column(String(256))
     validation_state: Mapped[str] = mapped_column(String(32))
+    is_selected: Mapped[bool] = mapped_column(Boolean, default=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     identity: Mapped[SourceIdentity] = relationship(back_populates="versions")
 
@@ -87,6 +89,22 @@ class Registration:
 class IdentitySnapshot:
     state: str
     payload_hashes: tuple[str, ...]
+    selected_payload_hash: str | None
+
+
+class ConflictResolutionError(ValueError):
+    pass
+
+
+class ConflictResolution(Base):
+    __tablename__ = "conflict_resolutions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    identity_id: Mapped[int] = mapped_column(ForeignKey("source_identities.id"))
+    selected_version_id: Mapped[int] = mapped_column(ForeignKey("source_versions.id"))
+    actor: Mapped[str] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(512))
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 @dataclass(frozen=True)
@@ -178,8 +196,12 @@ class IngestionRegistry:
                     )
                 else:
                     identity.state = "CONFLICT"
+                    for version in identity.versions:
+                        version.is_selected = False
                     identity.versions.append(
-                        self._version(record, len(identity.versions) + 1, now)
+                        self._version(
+                            record, len(identity.versions) + 1, now, is_selected=False
+                        )
                     )
                     outcomes.append(RegistrationOutcome.CONFLICT)
             return outcomes
@@ -217,9 +239,14 @@ class IngestionRegistry:
         # Never choose between two payloads under the same source identity here.
         # Both survive and canonicalization must wait for the conflict to be resolved.
         identity.state = "CONFLICT"
+        for version in identity.versions:
+            version.is_selected = False
         identity.versions.append(
             self._version(
-                record, max(item.version for item in identity.versions) + 1, now
+                record,
+                max(item.version for item in identity.versions) + 1,
+                now,
+                is_selected=False,
             )
         )
         return RegistrationOutcome.CONFLICT
@@ -239,7 +266,61 @@ class IngestionRegistry:
                 return None
             versions = sorted(identity.versions, key=lambda value: value.version)
             return IdentitySnapshot(
-                identity.state, tuple(item.payload_hash for item in versions)
+                identity.state,
+                tuple(item.payload_hash for item in versions),
+                next(
+                    (item.payload_hash for item in versions if item.is_selected), None
+                ),
+            )
+
+    def resolve_conflict(
+        self,
+        source: str,
+        batch_id: str,
+        record_id: str,
+        selected_payload_hash: str,
+        actor: str,
+        reason: str,
+    ) -> None:
+        if not actor.strip() or not reason.strip():
+            raise ConflictResolutionError("actor and reason are required")
+        with Session(self.engine) as session, session.begin():
+            identity = session.scalar(
+                select(SourceIdentity)
+                .options(selectinload(SourceIdentity.versions))
+                .where(
+                    SourceIdentity.source == source,
+                    SourceIdentity.batch_id == batch_id,
+                    SourceIdentity.record_id == record_id,
+                )
+            )
+            if identity is None or identity.state != "CONFLICT":
+                raise ConflictResolutionError("source identity is not conflicted")
+            selected = next(
+                (
+                    version
+                    for version in identity.versions
+                    if version.payload_hash == selected_payload_hash
+                ),
+                None,
+            )
+            if selected is None:
+                raise ConflictResolutionError("selected payload is not a known version")
+            if selected.validation_state != "ACCEPTED":
+                raise ConflictResolutionError(
+                    "a quarantined payload cannot be selected"
+                )
+            for version in identity.versions:
+                version.is_selected = version.id == selected.id
+            identity.state = "ACCEPTED"
+            session.add(
+                ConflictResolution(
+                    identity_id=identity.id,
+                    selected_version_id=selected.id,
+                    actor=actor,
+                    reason=reason,
+                    resolved_at=datetime.now(timezone.utc),
+                )
             )
 
     def canonical_candidates(self) -> list[CanonicalCandidate]:
@@ -250,6 +331,7 @@ class IngestionRegistry:
                 .where(
                     SourceIdentity.state == "ACCEPTED",
                     SourceVersion.validation_state == "ACCEPTED",
+                    SourceVersion.is_selected.is_(True),
                 )
                 .order_by(SourceVersion.id)
             ).all()
@@ -265,12 +347,18 @@ class IngestionRegistry:
             ]
 
     @staticmethod
-    def _version(record: Registration, version: int, now: datetime) -> SourceVersion:
+    def _version(
+        record: Registration,
+        version: int,
+        now: datetime,
+        is_selected: bool = True,
+    ) -> SourceVersion:
         return SourceVersion(
             version=version,
             payload_hash=record.payload_hash,
             artifact_hash=record.artifact_hash,
             source_location=record.source_location,
             validation_state=record.validation_state,
+            is_selected=is_selected,
             first_seen_at=now,
         )
