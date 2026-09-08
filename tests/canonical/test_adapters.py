@@ -33,6 +33,7 @@ def test_originator_adapter_maps_instruction() -> None:
     assert event.business_event_id == "instruction-1"
     assert event.partner_loan_reference == "partner-loan-1"
     assert event.amount_paise == 125000
+    assert event.source_timestamp == datetime(2026, 9, 1, 4, 30, tzinfo=timezone.utc)
 
 
 def test_lms_adapter_maps_booking() -> None:
@@ -83,3 +84,46 @@ def test_bank_adapter_maps_settlement_and_reversal_reference() -> None:
     assert event.canonical_status is CanonicalStatus.REVERSED
     assert event.correlation_id == "instruction-1"
     assert event.related_event_reference == "transaction-0"
+
+
+def test_keeps_source_business_date_when_utc_date_is_previous_day() -> None:
+    row = {
+        "instruction_id": "instruction-1",
+        "loan_reference": "partner-loan-1",
+        "customer_surrogate_id": "customer-1",
+        "partner_code": "ARUNA",
+        "instruction_timestamp": "2026-09-01T01:00:00+05:30",
+        "amount_paise": "125000",
+        "currency": "INR",
+        "status": "APPROVED",
+        "batch_id": "batch-1",
+        "received_timestamp": "2026-09-01T01:02:00+05:30",
+    }
+
+    event = adapt("originator", row, PROVENANCE)
+
+    assert event.source_timestamp.date() == date(2026, 8, 31)
+    assert event.business_date == date(2026, 9, 1)
+
+
+def test_rejects_naive_source_timestamp() -> None:
+    row = {
+        "instruction_id": "instruction-1",
+        "loan_reference": "partner-loan-1",
+        "customer_surrogate_id": "customer-1",
+        "partner_code": "ARUNA",
+        "instruction_timestamp": "2026-09-01T10:00:00",
+        "amount_paise": "125000",
+        "currency": "INR",
+        "status": "APPROVED",
+        "batch_id": "batch-1",
+        "received_timestamp": "2026-09-01T10:02:00+05:30",
+    }
+
+    with pytest.raises(ValueError, match="instruction_timestamp must include"):
+        adapt("originator", row, PROVENANCE)
+
+
+from datetime import date, datetime, timezone
+
+import pytest

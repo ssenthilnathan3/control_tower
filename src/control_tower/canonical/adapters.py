@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import ClassVar
 
 from .models import (
@@ -28,21 +28,34 @@ class SourceAdapter(ABC):
         pass
 
     def _common(self, row: dict[str, str]) -> dict[str, object]:
-        source_timestamp = datetime.fromisoformat(row[self.timestamp_field])
+        source_local_timestamp = self._timestamp(
+            row[self.timestamp_field], self.timestamp_field
+        )
+        received_timestamp = self._timestamp(
+            row["received_timestamp"], "received_timestamp"
+        )
         source_status = row[self.status_field]
         return {
             "source_system": self.source_system,
             "event_type": self.event_type,
             "partner_code": row["partner_code"],
             "batch_id": row["batch_id"],
-            "source_timestamp": source_timestamp,
-            "received_timestamp": datetime.fromisoformat(row["received_timestamp"]),
-            "business_date": source_timestamp.date(),
+            "source_timestamp": source_local_timestamp.astimezone(timezone.utc),
+            "received_timestamp": received_timestamp.astimezone(timezone.utc),
+            # Business date belongs to the source offset, not the UTC storage date.
+            "business_date": source_local_timestamp.date(),
             "amount_paise": int(row[self.amount_field]),
             "currency": row["currency"],
             "source_status": source_status,
             "canonical_status": self.status_map[source_status],
         }
+
+    @staticmethod
+    def _timestamp(value: str, field: str) -> datetime:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError(f"{field} must include a timezone offset")
+        return parsed
 
 
 class OriginatorAdapter(SourceAdapter):
