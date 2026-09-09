@@ -47,7 +47,7 @@ src/control_tower/
   ingestion/       validates delivery and owns raw evidence
   canonical/       maps accepted rows to one event shape
   reconciliation/  owns match decisions and run identity
-  exceptions/      owns investigation state and actions        [planned]
+  exceptions/      owns investigation state and actions
   close_control/   owns close-or-hold decisions                 [planned]
 ```
 
@@ -186,8 +186,8 @@ and encryption policies.
 - unresolved value cannot disappear when an exception is resolved
 - the same snapshot, config, and rule version produce the same close result
 
-exception resolution and close invariants are still target behavior. the source,
-canonical, membership, and run identity invariants have direct tests.
+exception transitions, approval separation, and action immutability have direct
+tests. close invariants are still target behavior.
 
 ## matching
 
@@ -215,6 +215,26 @@ rerunning unchanged input returns `REPLAY` instead of another run.
 `reconciliation.evaluation.evaluate` reads generator truth only after runtime
 matching finishes. seed `987654` currently produces 2,000 correct
 classifications and zero false matches.
+
+## exceptions
+
+blocking reconciliation outcomes create one exception per partner and business
+event. duplicate, amount mismatch, status mismatch, missing, and unresolved are
+blocking. timing differences inside grace stay pending outside the queue.
+
+`config/exceptions.json` maps each class to its owner, recommended action,
+escalation path, and SLA. amount thresholds assign priority. amounts remain integer
+paise in storage; INR conversion is presentation only.
+
+the workflow is `OPEN -> INVESTIGATING -> PENDING_APPROVAL -> RESOLVED`. rejection
+returns the item to investigation. a later reconciliation decision updates the
+evidence and reopens a resolved item. material overrides require a different
+approver from the person who requested resolution.
+
+each detection, assignment, transition, approval, rejection, and reopen appends an
+action with actor, role, reason, timestamp, and before/after state. application
+writes reject updates and deletes to these rows. production database permissions
+must give the runtime role insert-only access to action history as defense in depth.
 
 ## close control
 
@@ -260,8 +280,10 @@ surface as an artifact control failure.
 ### reconciliation fails halfway
 
 the run and all decision memberships are written in one database transaction.
-retry uses the same run key. exception creation is not implemented yet, so the
-close path must not treat reconciliation alone as a complete control.
+retry uses the same run key. exception sync can then be retried: unchanged
+decisions replay, while changed
+decisions refresh evidence and reopen resolved work. the close path must still not
+treat reconciliation alone as a complete control.
 
 ### optional AI is unavailable
 

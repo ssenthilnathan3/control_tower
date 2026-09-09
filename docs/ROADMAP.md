@@ -88,7 +88,7 @@ done when:
 - every accepted amount is matched, pending, or unresolved
 
 status: done for deterministic classification. the fresh seed has 2,000 correct
-classifications and zero false matches. exception records are next.
+classifications and zero false matches.
 
 ## 5. route exceptions
 
@@ -107,6 +107,11 @@ done when:
 - every unresolved rupee appears in the queue
 - the UI or API cannot bypass role checks
 - a resolved item can be reconstructed from its action history
+
+status: done at the domain and persistence boundary. all blocking decisions enter
+the queue with policy-driven routing and SLA. transitions, maker-checker approval,
+append-only history, and reopen on changed evidence have direct tests. API role
+enforcement remains part of milestone 7.
 
 ## 6. decide close or hold
 
