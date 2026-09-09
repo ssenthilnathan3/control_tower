@@ -102,3 +102,48 @@ def test_duplicate_full_value_bank_record_is_not_forced_into_a_match() -> None:
 
     assert decision.outcome is ReconciliationOutcome.DUPLICATE_EVENT
     assert decision.source_version_ids == (1, 2, 3, 4)
+
+
+def test_matches_documented_bank_split_when_legs_balance_exactly() -> None:
+    bank = replace(_event(SourceSystem.BANK, 3), amount_paise=60000)
+    second_leg = replace(
+        bank,
+        provenance=replace(bank.provenance, source_version_id=4),
+        source_record_id="transaction-2",
+        amount_paise=65000,
+    )
+
+    decision = reconcile(
+        [
+            _event(SourceSystem.ORIGINATOR, 1),
+            _event(SourceSystem.LMS, 2),
+            bank,
+            second_leg,
+        ],
+        POLICY,
+    )[0]
+
+    assert decision.outcome is ReconciliationOutcome.COMPOSITE_MATCH
+    assert decision.source_version_ids == (1, 2, 3, 4)
+
+
+def test_does_not_match_split_when_one_paise_is_missing() -> None:
+    bank = replace(_event(SourceSystem.BANK, 3), amount_paise=60000)
+    second_leg = replace(
+        bank,
+        provenance=replace(bank.provenance, source_version_id=4),
+        source_record_id="transaction-2",
+        amount_paise=64999,
+    )
+
+    decision = reconcile(
+        [
+            _event(SourceSystem.ORIGINATOR, 1),
+            _event(SourceSystem.LMS, 2),
+            bank,
+            second_leg,
+        ],
+        POLICY,
+    )[0]
+
+    assert decision.outcome is ReconciliationOutcome.UNRESOLVED

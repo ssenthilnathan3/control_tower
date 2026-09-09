@@ -27,6 +27,27 @@ def _is_duplicate(instruction: CanonicalEvent, events: list[CanonicalEvent]) -> 
     return len(signatures) != len(set(signatures))
 
 
+def _is_composite(
+    instruction: CanonicalEvent,
+    bank_rows: list[CanonicalEvent],
+    lms_rows: list[CanonicalEvent],
+) -> bool:
+    related = bank_rows + lms_rows
+    return (
+        bool(bank_rows)
+        and bool(lms_rows)
+        and (len(bank_rows) > 1 or len(lms_rows) > 1)
+        and all(event.currency == "INR" for event in related)
+        and all(event.canonical_status is CanonicalStatus.SUCCESS for event in related)
+        and all(
+            event.received_timestamp <= instruction.reconciliation_cutoff
+            for event in related
+        )
+        and sum(event.amount_paise for event in bank_rows) == instruction.amount_paise
+        and sum(event.amount_paise for event in lms_rows) == instruction.amount_paise
+    )
+
+
 def reconcile(
     events: list[CanonicalEvent], policy: ReconciliationPolicy
 ) -> list[ReconciliationDecision]:
@@ -52,6 +73,9 @@ def reconcile(
         ):
             outcome = ReconciliationOutcome.DUPLICATE_EVENT
             reason = "multiple full-value records have the same source relationship"
+        elif _is_composite(instruction, bank_rows, lms_rows):
+            outcome = ReconciliationOutcome.COMPOSITE_MATCH
+            reason = "related source legs sum exactly to the instruction amount"
         elif (
             len(bank_rows) == 1
             and len(lms_rows) == 1
