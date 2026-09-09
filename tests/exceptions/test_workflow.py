@@ -213,3 +213,13 @@ def test_changed_evidence_reopens_resolved_exception(tmp_path) -> None:
         assert exception.status == "REOPENED"
         assert exception.classification == "STATUS_MISMATCH"
         assert action.action == "REOPENED"
+
+
+def test_action_history_cannot_be_changed(tmp_path) -> None:
+    engine, _, _ = _queue(tmp_path)
+
+    with Session(engine) as session:
+        action = session.scalar(select(ExceptionActionRecord))
+        action.reason = "rewritten history"
+        with pytest.raises(RuntimeError, match="append-only"):
+            session.commit()

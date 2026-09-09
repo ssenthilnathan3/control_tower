@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     select,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -86,6 +87,12 @@ class ExceptionActionRecord(Base):
     before_assignee: Mapped[str | None] = mapped_column(String(128))
     after_assignee: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+@event.listens_for(ExceptionActionRecord, "before_update")
+@event.listens_for(ExceptionActionRecord, "before_delete")
+def _reject_action_mutation(*_args) -> None:
+    raise RuntimeError("exception actions are append-only")
 
 
 class ExceptionWriteOutcome(str, Enum):
