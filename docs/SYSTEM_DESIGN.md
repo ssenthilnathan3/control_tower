@@ -45,8 +45,8 @@ the modules are still separate in code:
 src/control_tower/
   generator/       builds deterministic source data
   ingestion/       validates delivery and owns raw evidence
-  canonical/       maps accepted rows to one event shape       [planned]
-  reconciliation/  owns match decisions                        [planned]
+  canonical/       maps accepted rows to one event shape
+  reconciliation/  owns match decisions and run identity
   exceptions/      owns investigation state and actions        [planned]
   close_control/   owns close-or-hold decisions                 [planned]
 ```
@@ -77,7 +77,7 @@ ingestion.service.ingest_generated_feeds
         +--> records.jsonl with ACCEPTED or QUARANTINED
         |
         v
-canonical records               [planned]
+canonical records
         |
         v
 exact -> composite -> timing -> unresolved
@@ -156,7 +156,8 @@ raw evidence and generator truth live on the filesystem. operational ingestion
 state lives in a relational database through SQLAlchemy. local runs use
 `evidence/ingestion.db`, which survives process restarts.
 
-PostgreSQL is the deployment target when canonicalization starts. it will own:
+SQLite owns local operational state through SQLAlchemy. PostgreSQL is the
+deployment target for the same schema. the relational store owns:
 
 - ingestion registrations and identity conflicts
 - canonical events
@@ -185,28 +186,35 @@ and encryption policies.
 - unresolved value cannot disappear when an exception is resolved
 - the same snapshot, config, and rule version produce the same close result
 
-the last six invariants are target behavior. tests will be added with those
-modules.
+exception resolution and close invariants are still target behavior. the source,
+canonical, membership, and run identity invariants have direct tests.
 
 ## matching
 
-planned order:
+implemented order:
 
 ```text
-duplicate delivery
-  -> exact reference + currency + status + amount
+duplicate full-value delivery
   -> documented composite with exact sum
+  -> exact reference + currency + status + amount before cutoff
+  -> missing source
+  -> contradictory status
+  -> amount mismatch
   -> timing difference inside grace
-  -> unresolved
+  -> unresolved, including orphan source records
 ```
 
 order matters. if duplicate rows reach composite matching first, they can make
 an incorrect sum look valid. arbitrary subset-sum search is also excluded. a
 shared reference and exact amount relationship are required.
 
-each decision will store the rule version and evidence IDs it used. rerunning
-with unchanged inputs should return the existing run instead of writing another
-set of decisions.
+each decision stores the rule version and source-version IDs it used. the run
+key hashes the active canonical snapshot, policy config, and rule version.
+rerunning unchanged input returns `REPLAY` instead of another run.
+
+`reconciliation.evaluation.evaluate` reads generator truth only after runtime
+matching finishes. seed `987654` currently produces 2,000 correct
+classifications and zero false matches.
 
 ## close control
 
@@ -251,8 +259,9 @@ surface as an artifact control failure.
 
 ### reconciliation fails halfway
 
-planned behavior: write decisions and exceptions in one database transaction.
-retry using the same run identity. do not expose a partial run to close control.
+the run and all decision memberships are written in one database transaction.
+retry uses the same run key. exception creation is not implemented yet, so the
+close path must not treat reconciliation alone as a complete control.
 
 ### optional AI is unavailable
 

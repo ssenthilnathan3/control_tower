@@ -66,6 +66,8 @@ done when:
 - no normalization step changes the source evidence
 - status and timestamp mappings have direct tests
 
+status: done. lineage hashes, conflicts, UTC timestamps, and cutoff behavior are tested.
+
 ## 4. reconcile deterministically
 
 goal: classify each instruction without guessing.
@@ -84,6 +86,9 @@ done when:
 - no source record is consumed by two matches
 - fresh-seed evaluation reports zero false deterministic matches
 - every accepted amount is matched, pending, or unresolved
+
+status: done for deterministic classification. the fresh seed has 2,000 correct
+classifications and zero false matches. exception records are next.
 
 ## 5. route exceptions
 
