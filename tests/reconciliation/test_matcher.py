@@ -207,3 +207,18 @@ def test_keeps_orphan_source_record_in_unresolved_output() -> None:
     assert len(decisions) == 1
     assert decisions[0].outcome is ReconciliationOutcome.UNRESOLVED
     assert decisions[0].source_version_ids == (3,)
+
+
+def test_does_not_match_same_reference_from_another_partner() -> None:
+    instruction = _event(SourceSystem.ORIGINATOR, 1)
+    lms = replace(_event(SourceSystem.LMS, 2), partner_code="BODHI")
+    bank = replace(_event(SourceSystem.BANK, 3), partner_code="BODHI")
+
+    decisions = reconcile([instruction, lms, bank], POLICY)
+
+    instruction_decision = next(
+        item for item in decisions if item.business_event_id == "instruction-1"
+    )
+    assert instruction_decision.outcome is ReconciliationOutcome.MISSING_EVENT
+    assert set(instruction_decision.source_version_ids) == {1}
+    assert len(decisions) == 3

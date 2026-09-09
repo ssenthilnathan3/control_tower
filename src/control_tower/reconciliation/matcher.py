@@ -78,19 +78,21 @@ def reconcile(
         (event for event in events if event.source_system is SourceSystem.ORIGINATOR),
         key=lambda event: event.business_event_id,
     )
-    banks: dict[str, list[CanonicalEvent]] = defaultdict(list)
-    bookings: dict[str, list[CanonicalEvent]] = defaultdict(list)
+    banks: dict[tuple[str, str], list[CanonicalEvent]] = defaultdict(list)
+    bookings: dict[tuple[str, str], list[CanonicalEvent]] = defaultdict(list)
     for event in events:
         if event.source_system is SourceSystem.BANK:
-            banks[event.correlation_id].append(event)
+            banks[(event.partner_code, event.correlation_id)].append(event)
         elif event.source_system is SourceSystem.LMS:
-            bookings[event.correlation_id].append(event)
+            bookings[(event.partner_code, event.correlation_id)].append(event)
 
     decisions: list[ReconciliationDecision] = []
     used_versions: set[int] = set()
     for instruction in originators:
-        bank_rows = banks[instruction.business_event_id]
-        lms_rows = bookings[instruction.partner_loan_reference or ""]
+        bank_rows = banks[(instruction.partner_code, instruction.business_event_id)]
+        lms_rows = bookings[
+            (instruction.partner_code, instruction.partner_loan_reference or "")
+        ]
         members = _members([instruction], lms_rows, bank_rows)
         if _is_duplicate(instruction, bank_rows) or _is_duplicate(
             instruction, lms_rows
