@@ -87,6 +87,7 @@ def reconcile(
             bookings[event.correlation_id].append(event)
 
     decisions: list[ReconciliationDecision] = []
+    used_versions: set[int] = set()
     for instruction in originators:
         bank_rows = banks[instruction.business_event_id]
         lms_rows = bookings[instruction.partner_loan_reference or ""]
@@ -147,6 +148,21 @@ def reconcile(
                 reason,
                 policy.rule_version,
                 members,
+            )
+        )
+        used_versions.update(members)
+    for event in sorted(events, key=lambda item: item.provenance.source_version_id):
+        version_id = event.provenance.source_version_id
+        if version_id in used_versions:
+            continue
+        decisions.append(
+            ReconciliationDecision(
+                f"orphan:{event.source_system.value}:{event.source_record_id}",
+                ReconciliationOutcome.UNRESOLVED,
+                event.amount_paise,
+                "source record has no related originator instruction",
+                policy.rule_version,
+                (version_id,),
             )
         )
     return decisions

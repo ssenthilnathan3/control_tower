@@ -193,3 +193,17 @@ def test_classifies_status_mismatch_before_amount_checks() -> None:
     )[0]
 
     assert decision.outcome is ReconciliationOutcome.STATUS_MISMATCH
+
+
+def test_keeps_orphan_source_record_in_unresolved_output() -> None:
+    bank = replace(
+        _event(SourceSystem.BANK, 3),
+        source_record_id="orphan-bank",
+        correlation_id="missing-instruction",
+    )
+
+    decisions = reconcile([bank], POLICY)
+
+    assert len(decisions) == 1
+    assert decisions[0].outcome is ReconciliationOutcome.UNRESOLVED
+    assert decisions[0].source_version_ids == (3,)
