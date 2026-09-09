@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -12,11 +13,11 @@ from sqlalchemy import (
     UniqueConstraint,
     select,
 )
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, selectinload
 
 from control_tower.ingestion.registry import Base
 
-from .models import ReconciliationDecision
+from .models import ReconciliationDecision, ReconciliationOutcome
 
 
 class ReconciliationRunRecord(Base):
@@ -71,6 +72,19 @@ class ReconciliationWriteOutcome(str, Enum):
     REPLAY = "REPLAY"
 
 
+@dataclass(frozen=True)
+class PersistedDecision:
+    decision_id: int
+    run_key: str
+    business_event_id: str
+    partner_code: str
+    outcome: ReconciliationOutcome
+    amount_paise: int
+    reason: str
+    rule_version: str
+    source_version_ids: tuple[int, ...]
+
+
 class ReconciliationRepository:
     def __init__(self, engine):
         self.engine = engine
@@ -114,3 +128,33 @@ class ReconciliationRepository:
                 run.decisions.append(record)
             session.add(run)
             return ReconciliationWriteOutcome.CREATED
+
+    def decisions_for_run(self, run_key: str) -> list[PersistedDecision]:
+        with Session(self.engine) as session:
+            run = session.scalar(
+                select(ReconciliationRunRecord)
+                .options(
+                    selectinload(ReconciliationRunRecord.decisions).selectinload(
+                        DecisionRecord.members
+                    )
+                )
+                .where(ReconciliationRunRecord.run_key == run_key)
+            )
+            if run is None:
+                raise ValueError(f"reconciliation run does not exist: {run_key}")
+            return [
+                PersistedDecision(
+                    decision.id,
+                    run.run_key,
+                    decision.business_event_id,
+                    decision.partner_code,
+                    ReconciliationOutcome(decision.outcome),
+                    decision.amount_paise,
+                    decision.reason,
+                    decision.rule_version,
+                    tuple(
+                        sorted(member.source_version_id for member in decision.members)
+                    ),
+                )
+                for decision in sorted(run.decisions, key=lambda item: item.id)
+            ]
