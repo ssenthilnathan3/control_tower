@@ -34,6 +34,7 @@ class ReconciliationPolicy:
 @dataclass(frozen=True)
 class ReconciliationDecision:
     business_event_id: str
+    partner_code: str
     outcome: ReconciliationOutcome
     amount_paise: int
     reason: str
@@ -41,8 +42,15 @@ class ReconciliationDecision:
     source_version_ids: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        if not self.business_event_id or not self.reason or not self.rule_version:
-            raise ValueError("business event, reason, and rule version are required")
+        if (
+            not self.business_event_id
+            or not self.partner_code
+            or not self.reason
+            or not self.rule_version
+        ):
+            raise ValueError(
+                "business event, partner, reason, and rule version are required"
+            )
         if self.amount_paise <= 0:
             raise ValueError("decision amount must be positive")
         if not self.source_version_ids:

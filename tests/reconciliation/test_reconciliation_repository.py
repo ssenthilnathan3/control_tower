@@ -19,6 +19,7 @@ def test_persists_a_reconciliation_run_idempotently(tmp_path) -> None:
     decisions = [
         ReconciliationDecision(
             "instruction-1",
+            "ARUNA",
             ReconciliationOutcome.EXACT_MATCH,
             125000,
             "all three sources agree",

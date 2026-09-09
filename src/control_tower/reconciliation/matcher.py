@@ -145,6 +145,7 @@ def reconcile(
         decisions.append(
             ReconciliationDecision(
                 instruction.business_event_id,
+                instruction.partner_code,
                 outcome,
                 instruction.amount_paise,
                 reason,
@@ -160,6 +161,7 @@ def reconcile(
         decisions.append(
             ReconciliationDecision(
                 f"orphan:{event.source_system.value}:{event.source_record_id}",
+                event.partner_code,
                 ReconciliationOutcome.UNRESOLVED,
                 event.amount_paise,
                 "source record has no related originator instruction",

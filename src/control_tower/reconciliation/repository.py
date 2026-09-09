@@ -42,6 +42,7 @@ class DecisionRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("reconciliation_runs.id"))
     business_event_id: Mapped[str] = mapped_column(String(128))
+    partner_code: Mapped[str] = mapped_column(String(64), index=True)
     outcome: Mapped[str] = mapped_column(String(32))
     amount_paise: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text)
@@ -100,6 +101,7 @@ class ReconciliationRepository:
             for decision in decisions:
                 record = DecisionRecord(
                     business_event_id=decision.business_event_id,
+                    partner_code=decision.partner_code,
                     outcome=decision.outcome.value,
                     amount_paise=decision.amount_paise,
                     reason=decision.reason,
