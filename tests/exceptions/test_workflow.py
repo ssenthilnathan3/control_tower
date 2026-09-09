@@ -164,3 +164,52 @@ def test_material_override_cannot_be_self_approved(tmp_path) -> None:
             "approving my override",
             NOW,
         )
+
+
+def test_changed_evidence_reopens_resolved_exception(tmp_path) -> None:
+    engine, repository, exception_id = _queue(tmp_path)
+    repository.start_investigation(
+        exception_id, "operator-1", ExceptionRole.OPERATOR, "checked evidence", NOW
+    )
+    repository.request_resolution(
+        exception_id, "operator-1", ExceptionRole.OPERATOR, "correction received", NOW
+    )
+    repository.approve_resolution(
+        exception_id,
+        "approver-1",
+        ExceptionRole.APPROVER,
+        "evidence is sufficient",
+        NOW,
+    )
+    reconciliation = ReconciliationRepository(engine)
+    reconciliation.save(
+        "d" * 64,
+        "e" * 64,
+        "f" * 64,
+        "phase1-v1",
+        [
+            ReconciliationDecision(
+                "instruction-1",
+                "ARUNA",
+                ReconciliationOutcome.STATUS_MISMATCH,
+                125000,
+                "later status evidence differs",
+                "phase1-v1",
+                (7, 8, 9),
+            )
+        ],
+    )
+
+    result = create_exceptions("d" * 64, reconciliation, repository, NOW)
+
+    with Session(engine) as session:
+        exception = session.scalar(select(ExceptionRecord))
+        action = session.scalars(
+            select(ExceptionActionRecord).order_by(ExceptionActionRecord.id.desc())
+        ).first()
+        assert result.created_count == 0
+        assert result.updated_count == 1
+        assert exception.exception_id == exception_id
+        assert exception.status == "REOPENED"
+        assert exception.classification == "STATUS_MISMATCH"
+        assert action.action == "REOPENED"

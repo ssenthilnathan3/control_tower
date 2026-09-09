@@ -20,6 +20,7 @@ BLOCKING_OUTCOMES = {
 class ExceptionSyncResult:
     created_count: int
     replayed_count: int
+    updated_count: int
     blocking_value_paise: int
 
 
@@ -47,6 +48,7 @@ def create_exceptions(
     return ExceptionSyncResult(
         outcomes.count(ExceptionWriteOutcome.CREATED),
         outcomes.count(ExceptionWriteOutcome.REPLAY),
+        outcomes.count(ExceptionWriteOutcome.UPDATED),
         sum(decision.amount_paise for decision in decisions),
     )
 

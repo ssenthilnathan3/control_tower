@@ -28,10 +28,15 @@ from .models import (
 
 class ExceptionRecord(Base):
     __tablename__ = "exceptions"
+    __table_args__ = (
+        UniqueConstraint(
+            "partner_code", "business_event_id", name="uq_exception_partner_event"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     exception_id: Mapped[str] = mapped_column(String(36), unique=True)
-    business_event_id: Mapped[str] = mapped_column(String(128), unique=True)
+    business_event_id: Mapped[str] = mapped_column(String(128))
     latest_decision_id: Mapped[int] = mapped_column(
         ForeignKey("reconciliation_decisions.id")
     )
@@ -103,15 +108,47 @@ class ExceptionRepository:
         with Session(self.engine) as session, session.begin():
             existing = session.scalar(
                 select(ExceptionRecord).where(
-                    ExceptionRecord.business_event_id == decision.business_event_id
+                    ExceptionRecord.business_event_id == decision.business_event_id,
+                    ExceptionRecord.partner_code == decision.partner_code,
                 )
             )
             if existing is not None:
-                return (
-                    ExceptionWriteOutcome.REPLAY
-                    if existing.latest_decision_id == decision.decision_id
-                    else ExceptionWriteOutcome.UPDATED
+                if existing.latest_decision_id == decision.decision_id:
+                    return ExceptionWriteOutcome.REPLAY
+                before_status = existing.status
+                existing.latest_decision_id = decision.decision_id
+                existing.classification = decision.outcome.value
+                existing.amount_paise = decision.amount_paise
+                existing.priority = policy.priority(decision.amount_paise)
+                class_policy = policy.classes[decision.outcome]
+                existing.owner = class_policy.owner
+                existing.recommended_action = class_policy.recommended_action
+                existing.escalation_path = class_policy.escalation_path
+                existing.sla_deadline = detected_at + timedelta(
+                    hours=class_policy.sla_hours
                 )
+                session.add_all(
+                    ExceptionEvidenceRecord(
+                        exception_record_id=existing.id,
+                        decision_id=decision.decision_id,
+                        source_version_id=source_version_id,
+                    )
+                    for source_version_id in decision.source_version_ids
+                )
+                if before_status == ExceptionStatus.RESOLVED.value:
+                    existing.status = ExceptionStatus.REOPENED.value
+                    self._action(
+                        session,
+                        existing,
+                        ExceptionAction.REOPENED,
+                        "system",
+                        ExceptionRole.SYSTEM,
+                        "reconciliation decision changed",
+                        detected_at,
+                        before_status,
+                        existing.assignee,
+                    )
+                return ExceptionWriteOutcome.UPDATED
             digest = hashlib.sha256(
                 f"{decision.partner_code}:{decision.business_event_id}".encode()
             ).hexdigest()[:20]
