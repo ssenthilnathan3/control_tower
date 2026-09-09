@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
 from sqlalchemy import (
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from control_tower.ingestion.registry import Base
 from control_tower.reconciliation import PersistedDecision
 
+from .config import ExceptionPolicy
 from .models import ExceptionStatus
 
 
@@ -35,6 +36,7 @@ class ExceptionRecord(Base):
     priority: Mapped[str] = mapped_column(String(32), default="UNASSESSED")
     owner: Mapped[str] = mapped_column(String(128), default="UNASSIGNED")
     recommended_action: Mapped[str] = mapped_column(Text, default="")
+    escalation_path: Mapped[str] = mapped_column(String(256), default="")
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -68,7 +70,10 @@ class ExceptionRepository:
         Base.metadata.create_all(engine)
 
     def create(
-        self, decision: PersistedDecision, detected_at: datetime
+        self,
+        decision: PersistedDecision,
+        detected_at: datetime,
+        policy: ExceptionPolicy,
     ) -> ExceptionWriteOutcome:
         with Session(self.engine) as session, session.begin():
             existing = session.scalar(
@@ -93,7 +98,13 @@ class ExceptionRepository:
                 amount_paise=decision.amount_paise,
                 partner_code=decision.partner_code,
                 status=ExceptionStatus.OPEN.value,
+                priority=policy.priority(decision.amount_paise),
+                owner=policy.classes[decision.outcome].owner,
+                recommended_action=policy.classes[decision.outcome].recommended_action,
+                escalation_path=policy.classes[decision.outcome].escalation_path,
                 detected_at=detected_at,
+                sla_deadline=detected_at
+                + timedelta(hours=policy.classes[decision.outcome].sla_hours),
             )
             session.add(exception)
             session.flush()

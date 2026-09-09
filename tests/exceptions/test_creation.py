@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
 from control_tower.exceptions import ExceptionRepository, create_exceptions
+from control_tower.exceptions.repository import ExceptionRecord
 from control_tower.reconciliation import (
     ReconciliationDecision,
     ReconciliationOutcome,
@@ -44,3 +46,13 @@ def test_creates_one_exception_per_blocking_decision_and_replays(tmp_path) -> No
     assert first.blocking_value_paise == 125000
     assert replay.replayed_count == 1
     assert exceptions.count() == 1
+    with Session(engine) as session:
+        exception = session.scalar(select(ExceptionRecord))
+        assert exception is not None
+        assert exception.owner == "finance_operations"
+        assert exception.priority == "P3"
+        assert exception.recommended_action
+        assert exception.escalation_path == "finance approver"
+        assert exception.sla_deadline == detected_at.replace(tzinfo=None) + timedelta(
+            hours=4
+        )
