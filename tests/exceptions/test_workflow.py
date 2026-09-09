@@ -96,3 +96,71 @@ def test_rejects_invalid_workflow_transition(tmp_path) -> None:
         repository.request_resolution(
             exception_id, "operator-1", ExceptionRole.OPERATOR, "not investigated", NOW
         )
+
+
+def test_approver_resolves_pending_exception(tmp_path) -> None:
+    engine, repository, exception_id = _queue(tmp_path)
+    repository.start_investigation(
+        exception_id, "operator-1", ExceptionRole.OPERATOR, "checked evidence", NOW
+    )
+    repository.request_resolution(
+        exception_id, "operator-1", ExceptionRole.OPERATOR, "correction received", NOW
+    )
+
+    repository.approve_resolution(
+        exception_id,
+        "approver-1",
+        ExceptionRole.APPROVER,
+        "evidence is sufficient",
+        NOW,
+    )
+
+    with Session(engine) as session:
+        exception = session.scalar(select(ExceptionRecord))
+        assert exception.status == "RESOLVED"
+
+
+def test_rejection_returns_to_investigation(tmp_path) -> None:
+    engine, repository, exception_id = _queue(tmp_path)
+    repository.start_investigation(
+        exception_id, "operator-1", ExceptionRole.OPERATOR, "checked evidence", NOW
+    )
+    repository.request_resolution(
+        exception_id, "operator-1", ExceptionRole.OPERATOR, "correction received", NOW
+    )
+
+    repository.reject_resolution(
+        exception_id, "approver-1", ExceptionRole.APPROVER, "missing bank proof", NOW
+    )
+
+    with Session(engine) as session:
+        exception = session.scalar(select(ExceptionRecord))
+        action = session.scalars(
+            select(ExceptionActionRecord).order_by(ExceptionActionRecord.id.desc())
+        ).first()
+        assert exception.status == "INVESTIGATING"
+        assert action.action == "REJECTED"
+
+
+def test_material_override_cannot_be_self_approved(tmp_path) -> None:
+    _, repository, exception_id = _queue(tmp_path)
+    repository.start_investigation(
+        exception_id, "approver-1", ExceptionRole.APPROVER, "checked evidence", NOW
+    )
+    repository.request_resolution(
+        exception_id,
+        "approver-1",
+        ExceptionRole.APPROVER,
+        "manual amount override",
+        NOW,
+        material_override=True,
+    )
+
+    with pytest.raises(ExceptionWorkflowError, match="another approver"):
+        repository.approve_resolution(
+            exception_id,
+            "approver-1",
+            ExceptionRole.APPROVER,
+            "approving my override",
+            NOW,
+        )

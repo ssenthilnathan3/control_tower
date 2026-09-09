@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -46,6 +47,7 @@ class ExceptionRecord(Base):
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolution_requested_by: Mapped[str | None] = mapped_column(String(128))
+    material_override: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ExceptionEvidenceRecord(Base):
@@ -210,6 +212,7 @@ class ExceptionRepository:
         role: ExceptionRole,
         reason: str,
         at: datetime,
+        material_override: bool = False,
     ) -> None:
         self._transition(
             exception_id,
@@ -221,7 +224,70 @@ class ExceptionRepository:
             reason,
             at,
             requested_by=actor,
+            material_override=material_override,
         )
+
+    def approve_resolution(
+        self,
+        exception_id: str,
+        actor: str,
+        role: ExceptionRole,
+        reason: str,
+        at: datetime,
+    ) -> None:
+        self._decide_resolution(exception_id, actor, role, reason, at, approved=True)
+
+    def reject_resolution(
+        self,
+        exception_id: str,
+        actor: str,
+        role: ExceptionRole,
+        reason: str,
+        at: datetime,
+    ) -> None:
+        self._decide_resolution(exception_id, actor, role, reason, at, approved=False)
+
+    def _decide_resolution(
+        self,
+        exception_id: str,
+        actor: str,
+        role: ExceptionRole,
+        reason: str,
+        at: datetime,
+        approved: bool,
+    ) -> None:
+        if role is not ExceptionRole.APPROVER:
+            raise ExceptionWorkflowError("approver role is required")
+        with Session(self.engine) as session, session.begin():
+            exception = self._get(session, exception_id)
+            if exception.status != ExceptionStatus.PENDING_APPROVAL.value:
+                raise ExceptionWorkflowError(
+                    f"cannot decide resolution from {exception.status}"
+                )
+            if (
+                exception.material_override
+                and exception.resolution_requested_by == actor
+            ):
+                raise ExceptionWorkflowError(
+                    "material override requires another approver"
+                )
+            before_status = exception.status
+            exception.status = (
+                ExceptionStatus.RESOLVED.value
+                if approved
+                else ExceptionStatus.INVESTIGATING.value
+            )
+            self._action(
+                session,
+                exception,
+                ExceptionAction.APPROVED if approved else ExceptionAction.REJECTED,
+                actor,
+                role,
+                reason,
+                at,
+                before_status,
+                exception.assignee,
+            )
 
     def _transition(
         self,
@@ -234,6 +300,7 @@ class ExceptionRepository:
         reason: str,
         at: datetime,
         requested_by: str | None = None,
+        material_override: bool | None = None,
     ) -> None:
         if role not in {ExceptionRole.OPERATOR, ExceptionRole.APPROVER}:
             raise ExceptionWorkflowError("operator or approver role is required")
@@ -247,6 +314,8 @@ class ExceptionRepository:
             exception.status = target.value
             if requested_by:
                 exception.resolution_requested_by = requested_by
+            if material_override is not None:
+                exception.material_override = material_override
             self._action(
                 session,
                 exception,
