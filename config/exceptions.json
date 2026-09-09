@@ -1,0 +1,38 @@
+{
+  "priority_thresholds_paise": {
+    "P1": 10000000,
+    "P2": 1000000
+  },
+  "classes": {
+    "DUPLICATE_EVENT": {
+      "owner": "engineering",
+      "recommended_action": "confirm duplicate delivery and fix source idempotency",
+      "escalation_path": "source partner",
+      "sla_hours": 8
+    },
+    "AMOUNT_MISMATCH": {
+      "owner": "finance_operations",
+      "recommended_action": "compare instruction, debit, and booking allocation",
+      "escalation_path": "finance approver",
+      "sla_hours": 4
+    },
+    "STATUS_MISMATCH": {
+      "owner": "lending_operations",
+      "recommended_action": "confirm final status with the contradicting source",
+      "escalation_path": "engineering investigation",
+      "sla_hours": 8
+    },
+    "MISSING_EVENT": {
+      "owner": "partner_operations",
+      "recommended_action": "request the missing source event or delivery evidence",
+      "escalation_path": "integration support",
+      "sla_hours": 8
+    },
+    "UNRESOLVED": {
+      "owner": "lending_operations",
+      "recommended_action": "review linked source evidence without forcing a match",
+      "escalation_path": "finance and engineering",
+      "sla_hours": 4
+    }
+  }
+}
