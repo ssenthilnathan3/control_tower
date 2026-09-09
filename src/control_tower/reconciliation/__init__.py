@@ -7,4 +7,6 @@ __all__ = [
     "ReconciliationPolicy",
     "ReconciliationRepository",
     "ReconciliationWriteOutcome",
+    "reconcile",
 ]
+from .matcher import reconcile

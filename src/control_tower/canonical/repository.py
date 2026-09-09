@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 
 from sqlalchemy import (
@@ -19,7 +19,13 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from control_tower.ingestion.registry import Base, SourceIdentity, SourceVersion
 
-from .models import CanonicalEvent
+from .models import (
+    CanonicalEvent,
+    CanonicalStatus,
+    EventType,
+    SourceProvenance,
+    SourceSystem,
+)
 
 
 class CanonicalRecord(Base):
@@ -128,6 +134,15 @@ class CanonicalRepository:
                 )
             return session.scalar(statement) or 0
 
+    def active_events(self) -> list[CanonicalEvent]:
+        with Session(self.engine) as session:
+            records = session.scalars(
+                select(CanonicalRecord)
+                .where(CanonicalRecord.record_state == "ACTIVE")
+                .order_by(CanonicalRecord.source_version_id)
+            ).all()
+            return [self._event(record) for record in records]
+
     @staticmethod
     def _record(write: CanonicalWrite) -> CanonicalRecord:
         event = write.event
@@ -156,4 +171,36 @@ class CanonicalRepository:
             artifact_hash=event.provenance.artifact_hash,
             source_location=event.provenance.source_location,
             record_state="ACTIVE",
+        )
+
+    @staticmethod
+    def _event(record: CanonicalRecord) -> CanonicalEvent:
+        return CanonicalEvent(
+            provenance=SourceProvenance(
+                record.source_version_id,
+                record.payload_hash,
+                record.artifact_hash,
+                record.source_location,
+            ),
+            source_system=SourceSystem(record.source_system),
+            event_type=EventType(record.event_type),
+            source_record_id=record.source_record_id,
+            business_event_id=record.business_event_id,
+            correlation_id=record.correlation_id,
+            partner_code=record.partner_code,
+            batch_id=record.batch_id,
+            loan_id=record.loan_id,
+            customer_surrogate_id=record.customer_surrogate_id,
+            partner_loan_reference=record.partner_loan_reference,
+            source_timestamp=record.source_timestamp.replace(tzinfo=timezone.utc),
+            received_timestamp=record.received_timestamp.replace(tzinfo=timezone.utc),
+            reconciliation_cutoff=record.reconciliation_cutoff.replace(
+                tzinfo=timezone.utc
+            ),
+            business_date=record.business_date,
+            amount_paise=record.amount_paise,
+            currency=record.currency,
+            source_status=record.source_status,
+            canonical_status=CanonicalStatus(record.canonical_status),
+            related_event_reference=record.related_event_reference,
         )
