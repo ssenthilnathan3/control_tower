@@ -146,4 +146,50 @@ def test_does_not_match_split_when_one_paise_is_missing() -> None:
         POLICY,
     )[0]
 
+    assert decision.outcome is ReconciliationOutcome.AMOUNT_MISMATCH
+
+
+def test_marks_matching_late_record_pending_inside_grace() -> None:
+    bank = replace(
+        _event(SourceSystem.BANK, 3),
+        received_timestamp=datetime(2026, 9, 1, 13, 0, tzinfo=timezone.utc),
+    )
+
+    decision = reconcile(
+        [_event(SourceSystem.ORIGINATOR, 1), _event(SourceSystem.LMS, 2), bank],
+        POLICY,
+    )[0]
+
+    assert decision.outcome is ReconciliationOutcome.TIMING_DIFFERENCE
+
+
+def test_does_not_hide_record_arriving_after_grace() -> None:
+    bank = replace(
+        _event(SourceSystem.BANK, 3),
+        received_timestamp=datetime(2026, 9, 1, 15, 0, tzinfo=timezone.utc),
+    )
+
+    decision = reconcile(
+        [_event(SourceSystem.ORIGINATOR, 1), _event(SourceSystem.LMS, 2), bank],
+        POLICY,
+    )[0]
+
     assert decision.outcome is ReconciliationOutcome.UNRESOLVED
+
+
+def test_classifies_missing_lms_event() -> None:
+    decision = reconcile(
+        [_event(SourceSystem.ORIGINATOR, 1), _event(SourceSystem.BANK, 3)], POLICY
+    )[0]
+
+    assert decision.outcome is ReconciliationOutcome.MISSING_EVENT
+
+
+def test_classifies_status_mismatch_before_amount_checks() -> None:
+    lms = replace(_event(SourceSystem.LMS, 2), canonical_status=CanonicalStatus.PENDING)
+    decision = reconcile(
+        [_event(SourceSystem.ORIGINATOR, 1), lms, _event(SourceSystem.BANK, 3)],
+        POLICY,
+    )[0]
+
+    assert decision.outcome is ReconciliationOutcome.STATUS_MISMATCH

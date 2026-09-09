@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import timedelta
 
 from control_tower.canonical import (
     CanonicalEvent,
@@ -48,6 +49,28 @@ def _is_composite(
     )
 
 
+def _is_timing_difference(
+    instruction: CanonicalEvent,
+    bank_rows: list[CanonicalEvent],
+    lms_rows: list[CanonicalEvent],
+    grace_minutes: int,
+) -> bool:
+    related = bank_rows + lms_rows
+    grace_end = instruction.reconciliation_cutoff + timedelta(minutes=grace_minutes)
+    return (
+        bool(bank_rows)
+        and bool(lms_rows)
+        and all(event.canonical_status is CanonicalStatus.SUCCESS for event in related)
+        and sum(event.amount_paise for event in bank_rows) == instruction.amount_paise
+        and sum(event.amount_paise for event in lms_rows) == instruction.amount_paise
+        and any(
+            event.received_timestamp > instruction.reconciliation_cutoff
+            for event in related
+        )
+        and all(event.received_timestamp <= grace_end for event in related)
+    )
+
+
 def reconcile(
     events: list[CanonicalEvent], policy: ReconciliationPolicy
 ) -> list[ReconciliationDecision]:
@@ -92,9 +115,30 @@ def reconcile(
         ):
             outcome = ReconciliationOutcome.EXACT_MATCH
             reason = "stable references, status, currency, amount, and cutoff agree"
+        elif not bank_rows or not lms_rows:
+            outcome = ReconciliationOutcome.MISSING_EVENT
+            missing = "bank" if not bank_rows else "LMS"
+            reason = f"{missing} event is absent from the source relationship"
+        elif any(
+            event.canonical_status is not CanonicalStatus.SUCCESS
+            for event in bank_rows + lms_rows
+        ):
+            outcome = ReconciliationOutcome.STATUS_MISMATCH
+            reason = "source statuses do not agree on a successful disbursement"
+        elif (
+            sum(event.amount_paise for event in bank_rows) != instruction.amount_paise
+            or sum(event.amount_paise for event in lms_rows) != instruction.amount_paise
+        ):
+            outcome = ReconciliationOutcome.AMOUNT_MISMATCH
+            reason = "source amounts do not balance to the instruction"
+        elif _is_timing_difference(
+            instruction, bank_rows, lms_rows, policy.grace_minutes
+        ):
+            outcome = ReconciliationOutcome.TIMING_DIFFERENCE
+            reason = "matching evidence arrived after cutoff but inside grace"
         else:
             outcome = ReconciliationOutcome.UNRESOLVED
-            reason = "no deterministic exact or duplicate rule applies"
+            reason = "evidence does not satisfy a deterministic rule"
         decisions.append(
             ReconciliationDecision(
                 instruction.business_event_id,
