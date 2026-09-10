@@ -4,16 +4,18 @@ from .models import (
     ExceptionStatus,
     ExceptionWorkflowError,
 )
-from .repository import ExceptionRepository
+from .repository import ExceptionActionSnapshot, ExceptionRepository, ExceptionSummary
 from .service import ExceptionSyncResult, create_exceptions
 
 __all__ = [
     "ExceptionAction",
+    "ExceptionActionSnapshot",
     "ExceptionClassPolicy",
     "ExceptionPolicy",
     "ExceptionRepository",
     "ExceptionRole",
     "ExceptionStatus",
+    "ExceptionSummary",
     "ExceptionSyncResult",
     "ExceptionWorkflowError",
     "create_exceptions",

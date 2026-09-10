@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from control_tower.ingestion.registry import Base
@@ -69,6 +70,35 @@ class CloseControlRepository:
         blockers: tuple[CloseBlocker, ...],
         decided_at: datetime,
     ) -> CloseResult:
+        try:
+            return self._save(
+                decision_hash,
+                reconciliation_run_key,
+                snapshot_hash,
+                policy_version,
+                policy_hash,
+                actor,
+                outcome,
+                scorecard,
+                blockers,
+                decided_at,
+            )
+        except IntegrityError:
+            return self.get(decision_hash)
+
+    def _save(
+        self,
+        decision_hash: str,
+        reconciliation_run_key: str,
+        snapshot_hash: str,
+        policy_version: str,
+        policy_hash: str,
+        actor: str,
+        outcome: CloseOutcome,
+        scorecard: CloseScorecard,
+        blockers: tuple[CloseBlocker, ...],
+        decided_at: datetime,
+    ) -> CloseResult:
         with Session(self.engine) as session, session.begin():
             existing = session.scalar(
                 select(CloseDecisionRecord).where(
@@ -122,6 +152,32 @@ class CloseControlRepository:
                 scorecard,
                 blockers,
             )
+
+    def get(self, decision_hash: str) -> CloseResult:
+        with Session(self.engine) as session:
+            record = session.scalar(
+                select(CloseDecisionRecord).where(
+                    CloseDecisionRecord.decision_hash == decision_hash
+                )
+            )
+            if record is None:
+                raise ValueError(f"close decision does not exist: {decision_hash}")
+            return self._result(session, record, CloseWriteOutcome.REPLAY)
+
+    def list(self, limit: int = 50, offset: int = 0) -> list[CloseResult]:
+        if not 1 <= limit <= 200 or offset < 0:
+            raise ValueError("limit must be 1..200 and offset cannot be negative")
+        with Session(self.engine) as session:
+            records = session.scalars(
+                select(CloseDecisionRecord)
+                .order_by(CloseDecisionRecord.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            return [
+                self._result(session, record, CloseWriteOutcome.REPLAY)
+                for record in records
+            ]
 
     @staticmethod
     def _result(

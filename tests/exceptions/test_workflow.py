@@ -72,6 +72,8 @@ def test_operator_assigns_investigates_and_requests_resolution(tmp_path) -> None
         "bank confirmed correction",
         NOW,
     )
+    queue = repository.list(partner_code="ARUNA")
+    history = repository.actions(exception_id)
 
     with Session(engine) as session:
         exception = session.scalar(select(ExceptionRecord))
@@ -81,6 +83,9 @@ def test_operator_assigns_investigates_and_requests_resolution(tmp_path) -> None
         assert exception.status == "PENDING_APPROVAL"
         assert exception.assignee == "operator-2"
         assert exception.resolution_requested_by == "operator-2"
+        assert queue[0].exception_id == exception_id
+        assert queue[0].amount_paise == 125000
+        assert len(history) == 4
         assert [action.action for action in actions] == [
             "DETECTED",
             "ASSIGNED",

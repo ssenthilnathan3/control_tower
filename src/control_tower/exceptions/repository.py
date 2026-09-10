@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 
@@ -13,6 +16,7 @@ from sqlalchemy import (
     event,
     select,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from control_tower.ingestion.registry import Base
@@ -101,12 +105,60 @@ class ExceptionWriteOutcome(str, Enum):
     UPDATED = "UPDATED"
 
 
+@dataclass(frozen=True)
+class ExceptionSummary:
+    exception_id: str
+    business_event_id: str
+    partner_code: str
+    classification: str
+    amount_paise: int
+    status: ExceptionStatus
+    priority: str
+    owner: str
+    assignee: str | None
+    detected_at: datetime
+    sla_deadline: datetime | None
+
+
+@dataclass(frozen=True)
+class ExceptionActionSnapshot:
+    action: ExceptionAction
+    actor: str
+    actor_role: ExceptionRole
+    reason: str
+    before_status: str | None
+    after_status: str
+    before_assignee: str | None
+    after_assignee: str | None
+    created_at: datetime
+
+
 class ExceptionRepository:
     def __init__(self, engine):
         self.engine = engine
         Base.metadata.create_all(engine)
 
     def create(
+        self,
+        decision: PersistedDecision,
+        detected_at: datetime,
+        policy: ExceptionPolicy,
+    ) -> ExceptionWriteOutcome:
+        try:
+            return self._create(decision, detected_at, policy)
+        except IntegrityError:
+            with Session(self.engine) as session:
+                existing = session.scalar(
+                    select(ExceptionRecord).where(
+                        ExceptionRecord.business_event_id == decision.business_event_id,
+                        ExceptionRecord.partner_code == decision.partner_code,
+                    )
+                )
+                if existing and existing.latest_decision_id == decision.decision_id:
+                    return ExceptionWriteOutcome.REPLAY
+            raise
+
+    def _create(
         self,
         decision: PersistedDecision,
         detected_at: datetime,
@@ -413,3 +465,60 @@ class ExceptionRepository:
     def count(self) -> int:
         with Session(self.engine) as session:
             return len(session.scalars(select(ExceptionRecord.id)).all())
+
+    def list(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: ExceptionStatus | None = None,
+        partner_code: str | None = None,
+    ) -> list[ExceptionSummary]:
+        if not 1 <= limit <= 200 or offset < 0:
+            raise ValueError("limit must be 1..200 and offset cannot be negative")
+        statement = select(ExceptionRecord)
+        if status is not None:
+            statement = statement.where(ExceptionRecord.status == status.value)
+        if partner_code is not None:
+            statement = statement.where(ExceptionRecord.partner_code == partner_code)
+        statement = statement.order_by(ExceptionRecord.id).limit(limit).offset(offset)
+        with Session(self.engine) as session:
+            return [self._summary(record) for record in session.scalars(statement)]
+
+    def actions(self, exception_id: str) -> list[ExceptionActionSnapshot]:
+        with Session(self.engine) as session:
+            exception = self._get(session, exception_id)
+            records = session.scalars(
+                select(ExceptionActionRecord)
+                .where(ExceptionActionRecord.exception_record_id == exception.id)
+                .order_by(ExceptionActionRecord.id)
+            )
+            return [
+                ExceptionActionSnapshot(
+                    ExceptionAction(record.action),
+                    record.actor,
+                    ExceptionRole(record.actor_role),
+                    record.reason,
+                    record.before_status,
+                    record.after_status,
+                    record.before_assignee,
+                    record.after_assignee,
+                    record.created_at,
+                )
+                for record in records
+            ]
+
+    @staticmethod
+    def _summary(record: ExceptionRecord) -> ExceptionSummary:
+        return ExceptionSummary(
+            record.exception_id,
+            record.business_event_id,
+            record.partner_code,
+            record.classification,
+            record.amount_paise,
+            ExceptionStatus(record.status),
+            record.priority,
+            record.owner,
+            record.assignee,
+            record.detected_at,
+            record.sla_deadline,
+        )

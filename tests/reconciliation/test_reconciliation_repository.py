@@ -33,6 +33,7 @@ def test_persists_a_reconciliation_run_idempotently(tmp_path) -> None:
 
     assert first is ReconciliationWriteOutcome.CREATED
     assert replay is ReconciliationWriteOutcome.REPLAY
+    assert repository.runs()[0].run_key == "a" * 64
     with Session(engine) as session:
         assert (
             session.scalar(select(func.count()).select_from(ReconciliationRunRecord))

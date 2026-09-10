@@ -184,3 +184,24 @@ class ReconciliationRepository:
                 run.rule_version,
                 run.created_at,
             )
+
+    def runs(self, limit: int = 50, offset: int = 0) -> list[PersistedRun]:
+        if not 1 <= limit <= 200 or offset < 0:
+            raise ValueError("limit must be 1..200 and offset cannot be negative")
+        with Session(self.engine) as session:
+            records = session.scalars(
+                select(ReconciliationRunRecord)
+                .order_by(ReconciliationRunRecord.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            return [
+                PersistedRun(
+                    record.run_key,
+                    record.snapshot_hash,
+                    record.config_hash,
+                    record.rule_version,
+                    record.created_at,
+                )
+                for record in records
+            ]

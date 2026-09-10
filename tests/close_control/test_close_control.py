@@ -23,6 +23,8 @@ NOW = datetime(2026, 9, 10, 9, 0, tzinfo=timezone.utc)
 def _scope(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'close.db'}"
     ingestion = IngestionRegistry(database_url)
+    ingestion_run_key = "i" * 64
+    ingestion.begin_run(ingestion_run_key)
     ingestion.register_many(
         [
             Registration(
@@ -61,6 +63,7 @@ def _scope(tmp_path):
         item.source_version_id for item in ingestion.canonical_candidates()
     )
     passed_control = ingestion.record_delivery_control(
+        ingestion_run_key,
         "b" * 64,
         "originator",
         "a" * 64,
@@ -73,6 +76,7 @@ def _scope(tmp_path):
         tmp_path / "passed",
     )
     failed_control = ingestion.record_delivery_control(
+        ingestion_run_key,
         "d" * 64,
         "bank",
         "e" * 64,
@@ -111,16 +115,17 @@ def _scope(tmp_path):
             ),
         ],
     )
-    return ingestion, reconciliation, passed_control, failed_control
+    ingestion.finish_run(ingestion_run_key, "COMPLETED")
+    return ingestion, reconciliation, ingestion_run_key, passed_control, failed_control
 
 
 def test_persists_hold_with_scorecard_and_traceable_blockers(tmp_path) -> None:
-    ingestion, reconciliation, passed, failed = _scope(tmp_path)
+    ingestion, reconciliation, ingestion_run, _, _ = _scope(tmp_path)
     repository = CloseControlRepository(ingestion.engine)
 
     result = calculate_close(
         "r" * 64,
-        (passed, failed),
+        ingestion_run,
         "close-operator",
         reconciliation,
         ingestion,
@@ -129,19 +134,22 @@ def test_persists_hold_with_scorecard_and_traceable_blockers(tmp_path) -> None:
     )
     replay = calculate_close(
         "r" * 64,
-        (failed, passed),
+        ingestion_run,
         "another-operator",
         reconciliation,
         ingestion,
         repository,
         decided_at=NOW,
     )
+    persisted = repository.get(result.decision_hash)
 
     assert result.outcome is CloseOutcome.HOLD
     assert result.write_outcome is CloseWriteOutcome.CREATED
     assert replay.write_outcome is CloseWriteOutcome.REPLAY
     assert replay.decision_hash == result.decision_hash
     assert replay.actor == "close-operator"
+    assert persisted.scorecard == result.scorecard
+    assert repository.list()[0].decision_hash == result.decision_hash
     assert result.scorecard.accepted_count == 2
     assert result.scorecard.accepted_value_paise == 30000
     assert result.scorecard.matched_value_paise == 10000
@@ -157,13 +165,13 @@ def test_persists_hold_with_scorecard_and_traceable_blockers(tmp_path) -> None:
 
 
 def test_policy_threshold_changes_only_expected_blockers(tmp_path) -> None:
-    ingestion, reconciliation, passed, _ = _scope(tmp_path)
+    ingestion, reconciliation, ingestion_run, _, _ = _scope(tmp_path)
     strict = ClosePolicy("strict", 0, 0, False, False)
     tolerant = ClosePolicy("tolerant", 0, 20000, False, False)
 
     held = calculate_close(
         "r" * 64,
-        (passed,),
+        ingestion_run,
         "close-operator",
         reconciliation,
         ingestion,
@@ -172,7 +180,7 @@ def test_policy_threshold_changes_only_expected_blockers(tmp_path) -> None:
     )
     closed = calculate_close(
         "r" * 64,
-        (passed,),
+        ingestion_run,
         "close-operator",
         reconciliation,
         ingestion,
@@ -189,12 +197,15 @@ def test_policy_threshold_changes_only_expected_blockers(tmp_path) -> None:
 
 
 def test_rejects_scope_without_controls_for_reconciliation_evidence(tmp_path) -> None:
-    ingestion, reconciliation, _, _ = _scope(tmp_path)
+    ingestion, reconciliation, _, _, _ = _scope(tmp_path)
+    empty_run = "x" * 64
+    ingestion.begin_run(empty_run)
+    ingestion.finish_run(empty_run, "COMPLETED")
 
     with pytest.raises(ValueError, match="do not cover"):
         calculate_close(
             "r" * 64,
-            (),
+            empty_run,
             "close-operator",
             reconciliation,
             ingestion,
