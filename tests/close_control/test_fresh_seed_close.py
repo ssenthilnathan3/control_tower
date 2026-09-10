@@ -37,7 +37,7 @@ def test_fresh_seed_publishes_accounted_phase_one_scorecard(tmp_path) -> None:
 
     result = calculate_close(
         run.run_key,
-        tuple(artifact.control_id for artifact in ingestion_result.artifacts),
+        ingestion_result.run_key,
         "phase1-evaluation",
         reconciliation,
         ingestion,

@@ -68,10 +68,21 @@ class SourceVersion(Base):
     identity: Mapped[SourceIdentity] = relationship(back_populates="versions")
 
 
+class IngestionRunRecord(Base):
+    __tablename__ = "ingestion_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_key: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DeliveryControlRecord(Base):
     __tablename__ = "delivery_controls"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ingestion_run_id: Mapped[int] = mapped_column(ForeignKey("ingestion_runs.id"))
     delivery_key: Mapped[str] = mapped_column(String(64), unique=True)
     source: Mapped[str] = mapped_column(String(32))
     artifact_hash: Mapped[str] = mapped_column(String(64))
@@ -149,6 +160,13 @@ class DeliveryControl:
 
 
 @dataclass(frozen=True)
+class IngestionRun:
+    run_key: str
+    status: str
+    control_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class QuarantineSnapshot:
     source_version_id: int
     source: str
@@ -180,8 +198,68 @@ class IngestionRegistry:
                     raise
         raise RuntimeError("registration retry exhausted")
 
+    def begin_run(self, run_key: str) -> IngestionRun:
+        with Session(self.engine) as session, session.begin():
+            record = session.scalar(
+                select(IngestionRunRecord).where(IngestionRunRecord.run_key == run_key)
+            )
+            if record is None:
+                record = IngestionRunRecord(
+                    run_key=run_key,
+                    status="RUNNING",
+                    started_at=datetime.now(timezone.utc),
+                )
+                session.add(record)
+                session.flush()
+            return self._run_snapshot(session, record)
+
+    def finish_run(self, run_key: str, status: str) -> None:
+        if status not in {"COMPLETED", "FAILED"}:
+            raise ValueError(f"invalid ingestion run status: {status}")
+        with Session(self.engine) as session, session.begin():
+            record = session.scalar(
+                select(IngestionRunRecord).where(IngestionRunRecord.run_key == run_key)
+            )
+            if record is None:
+                raise ValueError(f"ingestion run does not exist: {run_key}")
+            record.status = status
+            record.completed_at = datetime.now(timezone.utc)
+
+    def ingestion_run(self, run_key: str) -> IngestionRun:
+        with Session(self.engine) as session:
+            record = session.scalar(
+                select(IngestionRunRecord).where(IngestionRunRecord.run_key == run_key)
+            )
+            if record is None:
+                raise ValueError(f"ingestion run does not exist: {run_key}")
+            return self._run_snapshot(session, record)
+
+    def ingestion_runs(self, limit: int = 50, offset: int = 0) -> list[IngestionRun]:
+        if not 1 <= limit <= 200 or offset < 0:
+            raise ValueError("limit must be 1..200 and offset cannot be negative")
+        with Session(self.engine) as session:
+            records = session.scalars(
+                select(IngestionRunRecord)
+                .order_by(IngestionRunRecord.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            return [self._run_snapshot(session, record) for record in records]
+
+    @staticmethod
+    def _run_snapshot(session: Session, record: IngestionRunRecord) -> IngestionRun:
+        control_ids = tuple(
+            session.scalars(
+                select(DeliveryControlRecord.id)
+                .where(DeliveryControlRecord.ingestion_run_id == record.id)
+                .order_by(DeliveryControlRecord.id)
+            )
+        )
+        return IngestionRun(record.run_key, record.status, control_ids)
+
     def record_delivery_control(
         self,
+        ingestion_run_key: str,
         delivery_key: str,
         source: str,
         artifact_hash: str,
@@ -194,6 +272,13 @@ class IngestionRegistry:
         evidence_path: Path,
     ) -> int:
         with Session(self.engine) as session, session.begin():
+            ingestion_run = session.scalar(
+                select(IngestionRunRecord).where(
+                    IngestionRunRecord.run_key == ingestion_run_key
+                )
+            )
+            if ingestion_run is None:
+                raise ValueError(f"ingestion run does not exist: {ingestion_run_key}")
             existing = session.scalar(
                 select(DeliveryControlRecord).where(
                     DeliveryControlRecord.delivery_key == delivery_key
@@ -202,6 +287,7 @@ class IngestionRegistry:
             if existing is not None:
                 return existing.id
             record = DeliveryControlRecord(
+                ingestion_run_id=ingestion_run.id,
                 delivery_key=delivery_key,
                 source=source,
                 artifact_hash=artifact_hash,

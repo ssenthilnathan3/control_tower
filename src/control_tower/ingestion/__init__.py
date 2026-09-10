@@ -4,6 +4,7 @@ from .registry import (
     ConflictResolutionError,
     IdentitySnapshot,
     IngestionRegistry,
+    IngestionRun,
     RegistrationOutcome,
 )
 from .service import ingest_generated_feeds
@@ -16,6 +17,7 @@ __all__ = [
     "IngestionError",
     "IngestionRegistry",
     "IngestionResult",
+    "IngestionRun",
     "QuarantinedRecord",
     "RegistrationOutcome",
     "ingest_generated_feeds",

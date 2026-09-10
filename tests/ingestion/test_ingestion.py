@@ -22,6 +22,16 @@ def test_ingests_valid_feeds_and_preserves_immutable_evidence(tmp_path: Path) ->
     result = ingest_generated_feeds(generated.output_dir, tmp_path / "evidence")
 
     assert len(result.artifacts) == 3
+    assert (
+        IngestionRegistry.local(tmp_path / "evidence")
+        .ingestion_run(result.run_key)
+        .status
+        == "COMPLETED"
+    )
+    assert (
+        IngestionRegistry.local(tmp_path / "evidence").ingestion_runs()[0].run_key
+        == result.run_key
+    )
     assert result.accepted_row_count == generated.quality_report["total_source_records"]
     for artifact in result.artifacts:
         preserved = artifact.evidence_path / "source.csv"

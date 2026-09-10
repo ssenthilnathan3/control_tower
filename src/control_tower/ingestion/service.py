@@ -28,6 +28,16 @@ def _manifest_hash(manifest: dict[str, object]) -> str:
     return _sha256_bytes(encoded)
 
 
+def _ingestion_run_key(input_dir: Path) -> str:
+    digest = hashlib.sha256()
+    for source in sorted(CONTRACTS):
+        for directory, suffix in (("feeds", "csv"), ("manifests", "json")):
+            path = input_dir / directory / f"{source}.{suffix}"
+            digest.update(str(path.relative_to(input_dir)).encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def _load_manifest(path: Path, source: str) -> dict[str, object]:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -230,84 +240,97 @@ def ingest_generated_feeds(
         if database_url
         else IngestionRegistry.local(evidence_root)
     )
+    run_key = _ingestion_run_key(input_dir)
+    run = registry.begin_run(run_key)
+    if run.status == "FAILED":
+        raise IngestionError(f"ingestion run previously failed: {run_key}")
     artifacts: list[IngestedArtifact] = []
-    for source, contract in CONTRACTS.items():
-        feed_path = input_dir / "feeds" / f"{source}.csv"
-        manifest = _load_manifest(input_dir / "manifests" / f"{source}.json", source)
-        raw, rows = _read_feed(feed_path, source, contract)
-        artifact_hash = _sha256_bytes(raw)
-        validation_errors = [tuple(contract.validate(row)) for row in rows]
-        total = _detail_total(rows, contract.amount_field)
-
-        # A failed control is still evidence of what arrived. store it before rejecting.
-        evidence_path, quarantined = _preserve_evidence(
-            evidence_root,
-            source,
-            raw,
-            rows,
-            contract,
-            artifact_hash,
-            total,
-            validation_errors,
-        )
-        manifest_hash = _manifest_hash(manifest)
-        delivery_key = _sha256_bytes(
-            f"{source}:{artifact_hash}:{manifest_hash}".encode()
-        )
-        try:
-            artifact_hash, verified_total = _verify_controls(
-                source, raw, rows, contract, manifest
+    try:
+        for source, contract in CONTRACTS.items():
+            feed_path = input_dir / "feeds" / f"{source}.csv"
+            manifest = _load_manifest(
+                input_dir / "manifests" / f"{source}.json", source
             )
-        except IngestionError as error:
-            registry.record_delivery_control(
+            raw, rows = _read_feed(feed_path, source, contract)
+            artifact_hash = _sha256_bytes(raw)
+            validation_errors = [tuple(contract.validate(row)) for row in rows]
+            total = _detail_total(rows, contract.amount_field)
+
+            # A failed control is still evidence of what arrived.
+            evidence_path, quarantined = _preserve_evidence(
+                evidence_root,
+                source,
+                raw,
+                rows,
+                contract,
+                artifact_hash,
+                total,
+                validation_errors,
+            )
+            manifest_hash = _manifest_hash(manifest)
+            delivery_key = _sha256_bytes(
+                f"{source}:{artifact_hash}:{manifest_hash}".encode()
+            )
+            try:
+                artifact_hash, verified_total = _verify_controls(
+                    source, raw, rows, contract, manifest
+                )
+            except IngestionError as error:
+                registry.record_delivery_control(
+                    run_key,
+                    delivery_key,
+                    source,
+                    artifact_hash,
+                    manifest_hash,
+                    "FAILED",
+                    len(rows),
+                    total,
+                    len(quarantined),
+                    str(error),
+                    evidence_path,
+                )
+                raise
+            control_id = registry.record_delivery_control(
+                run_key,
                 delivery_key,
                 source,
                 artifact_hash,
                 manifest_hash,
-                "FAILED",
-                len(rows),
-                total,
-                len(quarantined),
-                str(error),
-                evidence_path,
-            )
-            raise
-        control_id = registry.record_delivery_control(
-            delivery_key,
-            source,
-            artifact_hash,
-            manifest_hash,
-            "PASSED",
-            len(rows),
-            verified_total,
-            len(quarantined),
-            None,
-            evidence_path,
-        )
-        outcomes, eligible_count = _register_rows(
-            registry,
-            source,
-            artifact_hash,
-            evidence_path,
-            rows,
-            contract,
-            validation_errors,
-            raw,
-        )
-        artifacts.append(
-            IngestedArtifact(
-                source,
-                artifact_hash,
-                control_id,
+                "PASSED",
                 len(rows),
                 verified_total,
+                len(quarantined),
+                None,
                 evidence_path,
-                len(rows) - len(quarantined),
-                quarantined,
-                eligible_count,
-                outcomes[RegistrationOutcome.NEW],
-                outcomes[RegistrationOutcome.REPLAY],
-                outcomes[RegistrationOutcome.CONFLICT],
             )
-        )
-    return IngestionResult(tuple(artifacts))
+            outcomes, eligible_count = _register_rows(
+                registry,
+                source,
+                artifact_hash,
+                evidence_path,
+                rows,
+                contract,
+                validation_errors,
+                raw,
+            )
+            artifacts.append(
+                IngestedArtifact(
+                    source,
+                    artifact_hash,
+                    control_id,
+                    len(rows),
+                    verified_total,
+                    evidence_path,
+                    len(rows) - len(quarantined),
+                    quarantined,
+                    eligible_count,
+                    outcomes[RegistrationOutcome.NEW],
+                    outcomes[RegistrationOutcome.REPLAY],
+                    outcomes[RegistrationOutcome.CONFLICT],
+                )
+            )
+    except Exception:
+        registry.finish_run(run_key, "FAILED")
+        raise
+    registry.finish_run(run_key, "COMPLETED")
+    return IngestionResult(run_key, tuple(artifacts))

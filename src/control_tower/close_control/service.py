@@ -27,7 +27,7 @@ def _hash(value: object) -> str:
 
 def calculate_close(
     run_key: str,
-    control_ids: tuple[int, ...],
+    ingestion_run_key: str,
     actor: str,
     reconciliation_repository: ReconciliationRepository,
     ingestion_registry: IngestionRegistry,
@@ -43,6 +43,10 @@ def calculate_close(
     )
     run = reconciliation_repository.run(run_key)
     decisions = reconciliation_repository.decisions_for_run(run_key)
+    ingestion_run = ingestion_registry.ingestion_run(ingestion_run_key)
+    if ingestion_run.status not in {"COMPLETED", "FAILED"}:
+        raise ValueError("ingestion run is not complete")
+    control_ids = ingestion_run.control_ids
     controls = ingestion_registry.delivery_controls(control_ids)
     source_version_ids = tuple(
         sorted({item for decision in decisions for item in decision.source_version_ids})
@@ -144,6 +148,7 @@ def calculate_close(
                 for item in blockers
             ],
             "control_ids": sorted(set(control_ids)),
+            "ingestion_run_key": ingestion_run_key,
             "policy_hash": policy_hash,
             "reconciliation_run_key": run.run_key,
             "snapshot_hash": run.snapshot_hash,

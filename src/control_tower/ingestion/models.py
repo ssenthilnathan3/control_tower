@@ -38,6 +38,7 @@ class IngestedArtifact:
 
 @dataclass(frozen=True)
 class IngestionResult:
+    run_key: str
     artifacts: tuple[IngestedArtifact, ...]
 
     @property
