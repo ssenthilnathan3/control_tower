@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     create_engine,
     select,
@@ -67,6 +68,23 @@ class SourceVersion(Base):
     identity: Mapped[SourceIdentity] = relationship(back_populates="versions")
 
 
+class DeliveryControlRecord(Base):
+    __tablename__ = "delivery_controls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    delivery_key: Mapped[str] = mapped_column(String(64), unique=True)
+    source: Mapped[str] = mapped_column(String(32))
+    artifact_hash: Mapped[str] = mapped_column(String(64))
+    manifest_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    row_count: Mapped[int] = mapped_column(Integer)
+    total_amount_paise: Mapped[int | None] = mapped_column(Integer)
+    quarantined_count: Mapped[int] = mapped_column(Integer)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    evidence_path: Mapped[str] = mapped_column(String(512))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RegistrationOutcome(str, Enum):
     NEW = "NEW"
     REPLAY = "REPLAY"
@@ -116,6 +134,31 @@ class CanonicalCandidate:
     source_location: str
 
 
+@dataclass(frozen=True)
+class DeliveryControl:
+    control_id: int
+    delivery_key: str
+    source: str
+    artifact_hash: str
+    status: str
+    row_count: int
+    total_amount_paise: int | None
+    quarantined_count: int
+    failure_reason: str | None
+    evidence_path: str
+
+
+@dataclass(frozen=True)
+class QuarantineSnapshot:
+    source_version_id: int
+    source: str
+    batch_id: str
+    record_id: str
+    partner_code: str
+    artifact_hash: str
+    source_location: str
+
+
 class IngestionRegistry:
     def __init__(self, database_url: str):
         self.engine = create_engine(database_url)
@@ -136,6 +179,120 @@ class IngestionRegistry:
                 if attempt:
                     raise
         raise RuntimeError("registration retry exhausted")
+
+    def record_delivery_control(
+        self,
+        delivery_key: str,
+        source: str,
+        artifact_hash: str,
+        manifest_hash: str,
+        status: str,
+        row_count: int,
+        total_amount_paise: int | None,
+        quarantined_count: int,
+        failure_reason: str | None,
+        evidence_path: Path,
+    ) -> int:
+        with Session(self.engine) as session, session.begin():
+            existing = session.scalar(
+                select(DeliveryControlRecord).where(
+                    DeliveryControlRecord.delivery_key == delivery_key
+                )
+            )
+            if existing is not None:
+                return existing.id
+            record = DeliveryControlRecord(
+                delivery_key=delivery_key,
+                source=source,
+                artifact_hash=artifact_hash,
+                manifest_hash=manifest_hash,
+                status=status,
+                row_count=row_count,
+                total_amount_paise=total_amount_paise,
+                quarantined_count=quarantined_count,
+                failure_reason=failure_reason,
+                evidence_path=str(evidence_path),
+                received_at=datetime.now(timezone.utc),
+            )
+            session.add(record)
+            session.flush()
+            return record.id
+
+    def delivery_controls(self, control_ids: tuple[int, ...]) -> list[DeliveryControl]:
+        if not control_ids:
+            return []
+        with Session(self.engine) as session:
+            records = session.scalars(
+                select(DeliveryControlRecord).where(
+                    DeliveryControlRecord.id.in_(control_ids)
+                )
+            ).all()
+            if len(records) != len(set(control_ids)):
+                raise ValueError("one or more delivery controls do not exist")
+            return [
+                DeliveryControl(
+                    record.id,
+                    record.delivery_key,
+                    record.source,
+                    record.artifact_hash,
+                    record.status,
+                    record.row_count,
+                    record.total_amount_paise,
+                    record.quarantined_count,
+                    record.failure_reason,
+                    record.evidence_path,
+                )
+                for record in sorted(records, key=lambda item: item.id)
+            ]
+
+    def delivery_control_ids(self, status: str | None = None) -> tuple[int, ...]:
+        with Session(self.engine) as session:
+            statement = select(DeliveryControlRecord.id)
+            if status is not None:
+                statement = statement.where(DeliveryControlRecord.status == status)
+            return tuple(session.scalars(statement.order_by(DeliveryControlRecord.id)))
+
+    def quarantines_for_artifacts(
+        self, artifact_hashes: tuple[str, ...]
+    ) -> list[QuarantineSnapshot]:
+        if not artifact_hashes:
+            return []
+        with Session(self.engine) as session:
+            records = session.execute(
+                select(SourceVersion, SourceIdentity)
+                .join(SourceIdentity, SourceVersion.identity_id == SourceIdentity.id)
+                .where(
+                    SourceVersion.artifact_hash.in_(artifact_hashes),
+                    SourceVersion.validation_state == "QUARANTINED",
+                )
+            ).all()
+            return [
+                QuarantineSnapshot(
+                    version.id,
+                    identity.source,
+                    identity.batch_id,
+                    identity.record_id,
+                    identity.partner_code,
+                    version.artifact_hash,
+                    version.source_location,
+                )
+                for version, identity in sorted(records, key=lambda item: item[0].id)
+            ]
+
+    def artifact_hashes_for_versions(
+        self, source_version_ids: tuple[int, ...]
+    ) -> tuple[str, ...]:
+        if not source_version_ids:
+            return ()
+        with Session(self.engine) as session:
+            records = session.execute(
+                select(SourceVersion.id, SourceVersion.artifact_hash).where(
+                    SourceVersion.id.in_(source_version_ids)
+                )
+            ).all()
+            if len(records) != len(set(source_version_ids)):
+                raise ValueError("one or more source versions do not exist")
+            return tuple(sorted({artifact_hash for _, artifact_hash in records}))
 
     def _register(self, record: Registration) -> RegistrationOutcome:
         now = datetime.now(timezone.utc)

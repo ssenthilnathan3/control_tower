@@ -20,6 +20,7 @@ class QuarantinedRecord:
 class IngestedArtifact:
     source: str
     artifact_hash: str
+    control_id: int
     row_count: int
     total_amount_paise: int
     evidence_path: Path

@@ -90,6 +90,12 @@ def test_rejects_manifest_control_mismatch(tmp_path: Path, manifest_field: str) 
     assert (
         tmp_path / "evidence" / "artifacts" / "bank" / artifact_hash / "source.csv"
     ).exists()
+    registry = IngestionRegistry.local(tmp_path / "evidence")
+    controls = registry.delivery_controls(registry.delivery_control_ids("FAILED"))
+    assert len(controls) == 1
+    assert controls[0].source == "bank"
+    assert controls[0].artifact_hash == artifact_hash
+    assert "manifest mismatch" in controls[0].failure_reason
 
 
 def test_replay_is_a_persisted_no_op(tmp_path: Path) -> None:

@@ -23,6 +23,11 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _manifest_hash(manifest: dict[str, object]) -> str:
+    encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    return _sha256_bytes(encoded)
+
+
 def _load_manifest(path: Path, source: str) -> dict[str, object]:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -245,8 +250,39 @@ def ingest_generated_feeds(
             total,
             validation_errors,
         )
-        artifact_hash, verified_total = _verify_controls(
-            source, raw, rows, contract, manifest
+        manifest_hash = _manifest_hash(manifest)
+        delivery_key = _sha256_bytes(
+            f"{source}:{artifact_hash}:{manifest_hash}".encode()
+        )
+        try:
+            artifact_hash, verified_total = _verify_controls(
+                source, raw, rows, contract, manifest
+            )
+        except IngestionError as error:
+            registry.record_delivery_control(
+                delivery_key,
+                source,
+                artifact_hash,
+                manifest_hash,
+                "FAILED",
+                len(rows),
+                total,
+                len(quarantined),
+                str(error),
+                evidence_path,
+            )
+            raise
+        control_id = registry.record_delivery_control(
+            delivery_key,
+            source,
+            artifact_hash,
+            manifest_hash,
+            "PASSED",
+            len(rows),
+            verified_total,
+            len(quarantined),
+            None,
+            evidence_path,
         )
         outcomes, eligible_count = _register_rows(
             registry,
@@ -262,6 +298,7 @@ def ingest_generated_feeds(
             IngestedArtifact(
                 source,
                 artifact_hash,
+                control_id,
                 len(rows),
                 verified_total,
                 evidence_path,
