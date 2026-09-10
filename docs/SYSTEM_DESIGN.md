@@ -165,6 +165,10 @@ deployment target for the same schema. the relational store owns:
 - exceptions and action history
 - close decisions and approvals
 
+Alembic owns schema upgrades. repository `create_all` calls keep isolated tests
+small, but they are not a deployment migration strategy. production startup must
+upgrade to the checked-in revision before serving traffic.
+
 why PostgreSQL? these records need unique constraints and transactions. using a
 queue or separate database for each module would make it harder to answer a
 basic question: which exact snapshot produced this close decision?
@@ -239,9 +243,10 @@ must give the runtime role insert-only access to action history as defense in de
 ## close control
 
 the Phase 1 close scope is explicit: one persisted reconciliation run and the
-selected ingestion delivery-control receipt IDs. this avoids a global rule where
-an old failed delivery blocks every future close. passed receipts must cover every
-artifact used by the reconciliation evidence.
+persisted ingestion run that owns its delivery-control receipts. this avoids both a
+global rule where an old failed delivery blocks every future close and a caller
+omitting a failed receipt. passed receipts must cover every artifact used by the
+reconciliation evidence.
 
 the close equation uses one originator instruction decision as the count unit:
 
@@ -299,7 +304,7 @@ treat reconciliation alone as a complete control.
 
 ### a close calculation is retried
 
-blockers are sorted before hashing. the reconciliation run, selected receipt IDs,
+blockers are sorted before hashing. the reconciliation and ingestion run identities,
 scorecard, and normalized policy produce the same decision hash, so retry returns
 the stored result instead of creating another close decision.
 

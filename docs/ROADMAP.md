@@ -141,6 +141,11 @@ verification accounts for all 2,000 instructions by count and value.
 goal: demonstrate the required journey without turning the project into a
 dashboard-only build.
 
+readiness: Alembic owns schema upgrades. ingestion runs group the complete set of
+delivery controls used by close, and repositories expose paginated run, exception,
+action-history, and close-result reads. HTTP authentication must derive actor and
+role from the server-side principal; request bodies must never supply authority.
+
 build:
 
 - add APIs for batches, reconciliation, exceptions, audit, and close
