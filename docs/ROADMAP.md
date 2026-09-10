@@ -157,6 +157,11 @@ done when:
 - the demo can ingest, reconcile, investigate, approve, and produce a close result
 - backend authorization still applies when the UI is bypassed
 
+status: done. the FastAPI layer exposes authenticated ingestion, reconciliation,
+exception, audit, and close operations. a responsive operator console uses the same
+endpoints. HTTP tests prove unauthenticated rejection, operator/approver separation,
+and the complete 2,000-instruction journey through a persisted `HOLD` decision.
+
 ## 8. prove the release
 
 goal: make evaluation boring and repeatable.

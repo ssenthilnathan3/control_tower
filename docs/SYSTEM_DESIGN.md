@@ -270,6 +270,20 @@ policy hash and version, actor, outcome, complete scorecard, ordered blockers, a
 deterministic decision hash. actor and time are recording metadata, not calculation
 inputs, so another operator replaying the same scope receives the original result.
 
+## operator API
+
+FastAPI exposes the Python service boundaries under `/api`. bearer tokens are
+looked up in `CONTROL_TOWER_IDENTITIES_JSON`; the resulting principal supplies the
+actor and role for every mutation. request bodies cannot choose either value.
+operators may ingest, reconcile, investigate, and request resolution. approvers
+are additionally required for approval, rejection, and close decisions.
+
+ingestion paths resolve below `CONTROL_TOWER_INPUT_ROOT` before files are read. the
+small browser console is served by the same process and calls these authenticated
+endpoints. bypassing the UI therefore does not bypass role checks. production must
+replace the static token map with an identity-provider integration while preserving
+the same server-derived `Principal` boundary.
+
 ## failure modes
 
 ### process stops while writing evidence
