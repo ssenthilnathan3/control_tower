@@ -12,6 +12,7 @@ import {
   Play,
   RefreshCw,
   Search,
+  ShieldCheck,
   X,
 } from 'lucide-preact'
 import '@fontsource-variable/inter'
@@ -37,11 +38,10 @@ function Badge({ value }) {
 }
 
 function Login({ onLogin }) {
-  const [token, setToken] = useState('')
   const [error, setError] = useState('')
-  const submit = async (event) => {
-    event.preventDefault()
+  const choose = async (token) => {
     try {
+      setError('')
       await onLogin(token)
     } catch (e) {
       setError(e.message)
@@ -49,31 +49,43 @@ function Login({ onLogin }) {
   }
   return (
     <div class="login">
-      <form class="login-card" onSubmit={submit}>
+      <div class="login-card">
         <div class="logo">CT</div>
         <h1>Control Tower</h1>
-        <p>Secure co-lending operations workspace</p>
-        <label>
-          Access token
-          <input
-            autoFocus
-            type="password"
-            value={token}
-            onInput={(e) => setToken(e.currentTarget.value)}
-            placeholder="Enter bearer token"
-          />
-        </label>
+        <p>Choose a workspace role to continue.</p>
+        <div class="role-options">
+          <button class="role-option" onClick={() => choose('operator-demo')}>
+            <div class="role-icon">
+              <Activity size={19} />
+            </div>
+            <div>
+              <strong>Operations</strong>
+              <span>Investigate and resolve exceptions</span>
+            </div>
+          </button>
+          <button class="role-option" onClick={() => choose('approver-demo')}>
+            <div class="role-icon approver">
+              <ShieldCheck size={19} />
+            </div>
+            <div>
+              <strong>Approver</strong>
+              <span>Review approvals and decide close</span>
+            </div>
+          </button>
+        </div>
         {error && <div class="form-error">{error}</div>}
-        <button class="button primary">Continue</button>
-        <small>Demo: operator-demo or approver-demo</small>
-      </form>
+        <small>Your selection stays active until you log out.</small>
+      </div>
     </div>
   )
 }
 
 function App() {
-  const [token, setToken] = useState('')
+  const [token, setToken] = useState(
+    () => localStorage.getItem('controlTowerToken') || '',
+  )
   const [user, setUser] = useState(null)
+  const [restoring, setRestoring] = useState(Boolean(token))
   const [exceptions, setExceptions] = useState([])
   const [ingestion, setIngestion] = useState([])
   const [reconciliation, setReconciliation] = useState([])
@@ -105,8 +117,14 @@ function App() {
   }
   const login = async (value) => {
     const principal = await api('/api/me', {}, value)
+    localStorage.setItem('controlTowerToken', value)
     setToken(value)
     setUser(principal)
+  }
+  const logout = () => {
+    localStorage.removeItem('controlTowerToken')
+    setToken('')
+    setUser(null)
   }
   const refresh = async () => {
     try {
@@ -131,6 +149,16 @@ function App() {
   useEffect(() => {
     if (user) refresh()
   }, [user, status])
+  useEffect(() => {
+    if (!token || user) return
+    api('/api/me', {}, token)
+      .then(setUser)
+      .catch(() => {
+        localStorage.removeItem('controlTowerToken')
+        setToken('')
+      })
+      .finally(() => setRestoring(false))
+  }, [])
   const run = async (name, task) => {
     setBusy(name)
     try {
@@ -180,6 +208,13 @@ function App() {
     )
     setSelected(null)
   }
+  if (restoring)
+    return (
+      <div class="app-loading">
+        <div class="logo">CT</div>
+        <span>Restoring workspace...</span>
+      </div>
+    )
   if (!user) return <Login onLogin={login} />
   const close = closes[0]
   const titles = {
@@ -246,13 +281,7 @@ function App() {
             <strong>{user.actor}</strong>
             <span>{user.role}</span>
           </div>
-          <button
-            class="icon-button"
-            onClick={() => {
-              setToken('')
-              setUser(null)
-            }}
-          >
+          <button class="icon-button" aria-label="Log out" onClick={logout}>
             <LogOut size={16} />
           </button>
         </div>
