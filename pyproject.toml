@@ -3,17 +3,23 @@ name = "co-lending-control-tower"
 version = "0.1.0"
 description = "Evidence-first co-lending reconciliation control"
 requires-python = ">=3.10"
-dependencies = ["alembic>=1.13,<2", "sqlalchemy>=2.0,<3"]
+dependencies = [
+  "alembic>=1.13,<2",
+  "fastapi>=0.116,<1",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn>=0.35,<1",
+]
 
 [project.scripts]
 control-tower-generate = "control_tower.generator.cli:main"
+control-tower-web = "control_tower.web.app:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [dependency-groups]
-dev = ["pytest>=8,<10"]
+dev = ["httpx>=0.28,<1", "pytest>=8,<10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
