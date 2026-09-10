@@ -225,23 +225,6 @@ def create_app(
     def exception_summary(_principal: Authenticated):
         return [_json(item) for item in exceptions.classification_summary()]
 
-    @app.get("/api/exceptions/unresolved-ids")
-    def unresolved_exception_ids(_principal: Authenticated):
-        return {"items": exceptions.unresolved_ids()}
-
-    @app.post("/api/exceptions/resolve-all")
-    def resolve_all_exceptions(body: ExceptionActionRequest, principal: Authenticated):
-        from datetime import datetime, timezone
-
-        require_role(principal, ExceptionRole.APPROVER)
-        count = exceptions.resolve_all(
-            principal.actor,
-            principal.role,
-            body.reason,
-            datetime.now(timezone.utc),
-        )
-        return {"resolved_count": count}
-
     @app.post("/api/exceptions/resolve-selected")
     def resolve_selected_exceptions(
         body: BulkExceptionActionRequest, principal: Authenticated
@@ -251,7 +234,7 @@ def create_app(
         require_role(principal, ExceptionRole.APPROVER)
         if not body.exception_ids:
             raise HTTPException(400, "at least one exception is required")
-        count = exceptions.resolve_all(
+        count = exceptions.resolve_many(
             principal.actor,
             principal.role,
             body.reason,

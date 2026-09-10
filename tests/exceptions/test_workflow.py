@@ -125,11 +125,15 @@ def test_approver_resolves_pending_exception(tmp_path) -> None:
         assert exception.status == "RESOLVED"
 
 
-def test_approver_resolves_all_exceptions_from_open(tmp_path) -> None:
-    engine, repository, _ = _queue(tmp_path)
+def test_approver_resolves_selected_exceptions_from_open(tmp_path) -> None:
+    engine, repository, exception_id = _queue(tmp_path)
 
-    resolved_count = repository.resolve_all(
-        "approver-1", ExceptionRole.APPROVER, "bulk review completed", NOW
+    resolved_count = repository.resolve_many(
+        "approver-1",
+        ExceptionRole.APPROVER,
+        "bulk review completed",
+        NOW,
+        [exception_id],
     )
 
     with Session(engine) as session:

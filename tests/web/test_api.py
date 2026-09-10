@@ -151,10 +151,19 @@ def test_operator_journey_and_approver_boundary(tmp_path: Path) -> None:
     assert restarted.status_code == 200
     assert restarted.json()["close"]["outcome"] in {"CLOSE", "HOLD"}
     restarted_body = restarted.json()
+    exception_ids = [
+        item["exception_id"]
+        for item in client.get("/api/exceptions?limit=200", headers=approver).json()[
+            "items"
+        ]
+    ]
     resolved = client.post(
-        "/api/exceptions/resolve-all",
+        "/api/exceptions/resolve-selected",
         headers=approver,
-        json={"reason": "all reconciliation differences reviewed"},
+        json={
+            "reason": "selected reconciliation differences reviewed",
+            "exception_ids": exception_ids,
+        },
     )
     assert resolved.status_code == 200
     final_close = client.post(

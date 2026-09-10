@@ -346,41 +346,6 @@ function App() {
       setBusy('')
     }
   }
-  const resolveAll = async () => {
-    if (!bulkReason.trim()) {
-      setNotice('Enter a bulk resolution reason before continuing.')
-      return
-    }
-    setBusy('resolve-all')
-    setNotice('')
-    try {
-      const result = await api('/api/exceptions/resolve-all', {
-        method: 'POST',
-        body: JSON.stringify({ reason: bulkReason.trim() }),
-      })
-      setSelectedIds([])
-      setBulkReason('')
-      setBulkMode('')
-      setNotice(`${result.resolved_count} anomalies resolved.`)
-      await refresh()
-    } catch (e) {
-      setNotice(e.message)
-    } finally {
-      setBusy('')
-    }
-  }
-  const openResolveAll = async () => {
-    setBusy('select-all')
-    try {
-      const result = await api('/api/exceptions/unresolved-ids')
-      setSelectedIds(result.items)
-      setBulkMode('all')
-    } catch (e) {
-      setNotice(e.message)
-    } finally {
-      setBusy('')
-    }
-  }
   if (restoring)
     return (
       <div class="app-loading">
@@ -655,13 +620,6 @@ function App() {
                     >
                       Resolve selected
                     </button>
-                    <button
-                      class="button"
-                      disabled={Boolean(busy)}
-                      onClick={openResolveAll}
-                    >
-                      Resolve all
-                    </button>
                   </>
                 )}
               </div>
@@ -861,15 +819,9 @@ function App() {
           >
             <div class="modal-head">
               <div>
-                <h2>
-                  {bulkMode === 'all'
-                    ? 'Resolve all anomalies'
-                    : 'Resolve selected anomalies'}
-                </h2>
+                <h2>Resolve selected anomalies</h2>
                 <p>
-                  {bulkMode === 'all'
-                    ? 'Every unresolved anomaly will be moved through approval.'
-                    : `${selectedIds.length} unresolved anomalies will be resolved.`}
+                  {selectedIds.length} unresolved anomalies will be resolved.
                 </p>
               </div>
               <button
@@ -901,14 +853,10 @@ function App() {
               <button
                 class="button primary"
                 disabled={Boolean(busy) || !bulkReason.trim()}
-                onClick={bulkMode === 'all' ? resolveAll : resolveSelected}
+                onClick={resolveSelected}
               >
                 {busy && <LoaderCircle class="spinner" size={14} />}
-                {busy
-                  ? 'Resolving...'
-                  : bulkMode === 'all'
-                    ? 'Resolve all'
-                    : `Resolve ${selectedIds.length}`}
+                {busy ? 'Resolving...' : `Resolve ${selectedIds.length}`}
               </button>
             </div>
           </section>

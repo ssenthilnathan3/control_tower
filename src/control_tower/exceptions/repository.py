@@ -351,13 +351,13 @@ class ExceptionRepository:
     ) -> None:
         self._decide_resolution(exception_id, actor, role, reason, at, approved=False)
 
-    def resolve_all(
+    def resolve_many(
         self,
         actor: str,
         role: ExceptionRole,
         reason: str,
         at: datetime,
-        exception_ids: list[str] | None = None,
+        exception_ids: list[str],
     ) -> int:
         if role is not ExceptionRole.APPROVER:
             raise ExceptionWorkflowError("approver role is required")
@@ -365,10 +365,7 @@ class ExceptionRepository:
             statement = select(ExceptionRecord).where(
                 ExceptionRecord.status != ExceptionStatus.RESOLVED.value
             )
-            if exception_ids is not None:
-                statement = statement.where(
-                    ExceptionRecord.exception_id.in_(exception_ids)
-                )
+            statement = statement.where(ExceptionRecord.exception_id.in_(exception_ids))
             records = session.scalars(statement).all()
             for exception in records:
                 status = ExceptionStatus(exception.status)
@@ -667,16 +664,6 @@ class ExceptionRepository:
                         ExceptionRecord.latest_decision_id.in_(decision_ids),
                         ExceptionRecord.status == ExceptionStatus.RESOLVED.value,
                     )
-                ).all()
-            )
-
-    def unresolved_ids(self) -> list[str]:
-        with Session(self.engine) as session:
-            return list(
-                session.scalars(
-                    select(ExceptionRecord.exception_id)
-                    .where(ExceptionRecord.status != ExceptionStatus.RESOLVED.value)
-                    .order_by(ExceptionRecord.id)
                 ).all()
             )
 
