@@ -80,6 +80,8 @@ def test_operator_journey_and_approver_boundary(tmp_path: Path) -> None:
     ).json()
     assert filtered["total"] >= 1
     assert all(item["classification"] == classification for item in filtered["items"])
+    summary = client.get("/api/exception-summary", headers=operator).json()
+    assert sum(item["count"] for item in summary) == queue_response["total"]
 
     exception_id = queue[0]["exception_id"]
     reason = {"reason": "source evidence checked"}

@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    func,
     select,
 )
 from sqlalchemy.exc import IntegrityError
@@ -131,6 +132,13 @@ class ExceptionActionSnapshot:
     before_assignee: str | None
     after_assignee: str | None
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class ExceptionClassSummary:
+    classification: str
+    count: int
+    amount_paise: int
 
 
 class ExceptionRepository:
@@ -556,6 +564,22 @@ class ExceptionRepository:
                     record.created_at,
                 )
                 for record in records
+            ]
+
+    def classification_summary(self) -> list[ExceptionClassSummary]:
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(
+                    ExceptionRecord.classification,
+                    func.count(ExceptionRecord.id),
+                    func.sum(ExceptionRecord.amount_paise),
+                )
+                .group_by(ExceptionRecord.classification)
+                .order_by(func.sum(ExceptionRecord.amount_paise).desc())
+            )
+            return [
+                ExceptionClassSummary(classification, count, amount_paise or 0)
+                for classification, count, amount_paise in rows
             ]
 
     @staticmethod

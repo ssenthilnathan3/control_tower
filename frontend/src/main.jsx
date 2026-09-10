@@ -106,6 +106,7 @@ function App() {
   const [user, setUser] = useState(null)
   const [restoring, setRestoring] = useState(Boolean(token))
   const [exceptions, setExceptions] = useState([])
+  const [exceptionSummary, setExceptionSummary] = useState([])
   const [exceptionPage, setExceptionPage] = useState({
     total: 0,
     limit: 25,
@@ -130,7 +131,12 @@ function App() {
   const [busy, setBusy] = useState('')
   const [loading, setLoading] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
-  const [view, setView] = useState('overview')
+  const [view, setView] = useState(() => {
+    const route = window.location.hash.slice(1)
+    return ['overview', 'exceptions', 'runs'].includes(route)
+      ? route
+      : 'overview'
+  })
 
   const api = async (path, options = {}, authToken = token) => {
     const response = await fetch(path, {
@@ -181,15 +187,16 @@ function App() {
           'min_amount_paise',
           String(Number(filters.exposure) * 100),
         )
-      const [queue, ingestions, reconciliations, decisions] = await Promise.all(
-        [
+      const [queue, summary, ingestions, reconciliations, decisions] =
+        await Promise.all([
           api(`/api/exceptions?${exceptionQuery}`),
+          api('/api/exception-summary'),
           api('/api/ingestion-runs'),
           api('/api/reconciliation-runs'),
           api('/api/close-decisions'),
-        ],
-      )
+        ])
       setExceptions(queue.items)
+      setExceptionSummary(summary)
       setExceptionPage({
         total: queue.total,
         limit: queue.limit,
@@ -217,6 +224,16 @@ function App() {
         setToken('')
       })
       .finally(() => setRestoring(false))
+  }, [])
+  useEffect(() => {
+    const syncRoute = () => {
+      const route = window.location.hash.slice(1)
+      if (['overview', 'exceptions', 'runs'].includes(route)) setView(route)
+    }
+    window.addEventListener('hashchange', syncRoute)
+    if (!window.location.hash)
+      window.history.replaceState(null, '', '#overview')
+    return () => window.removeEventListener('hashchange', syncRoute)
   }, [])
   const run = async (name, task) => {
     setBusy(name)
@@ -328,6 +345,7 @@ function App() {
   }
   const navigate = (next) => {
     setView(next)
+    window.location.hash = next
     setMobileNav(false)
   }
   return (
@@ -465,13 +483,7 @@ function App() {
               </section>
               <ScoreMetrics close={close} exceptions={exceptions} />
               <div class="dashboard-grid">
-                <ExceptionTable
-                  items={exceptions.slice(0, 6)}
-                  onOpen={openException}
-                  title="Recent exceptions"
-                  subtitle="Latest items requiring attention"
-                  loading={busy === 'detail'}
-                />
+                <ExceptionDonut items={exceptionSummary} />
                 <aside class="runs">
                   <RunPanel
                     title="Recent ingestion"
@@ -737,6 +749,52 @@ function App() {
         </div>
       )}
     </div>
+  )
+}
+
+function ExceptionDonut({ items }) {
+  const colors = ['#2563eb', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6']
+  const total = items.reduce((sum, item) => sum + item.count, 0)
+  let cursor = 0
+  const stops = items.map((item, index) => {
+    const start = cursor
+    cursor += total ? (item.count / total) * 100 : 0
+    return `${colors[index % colors.length]} ${start}% ${cursor}%`
+  })
+  return (
+    <section class="panel exception-chart">
+      <div class="panel-head">
+        <div>
+          <h3>Exception distribution</h3>
+          <span>All classifications by count</span>
+        </div>
+      </div>
+      {total ? (
+        <div class="chart-body">
+          <div
+            class="donut"
+            style={{ background: `conic-gradient(${stops.join(',')})` }}
+          >
+            <div>
+              <strong>{total}</strong>
+              <span>exceptions</span>
+            </div>
+          </div>
+          <div class="chart-legend">
+            {items.map((item, index) => (
+              <div>
+                <i style={{ background: colors[index % colors.length] }} />
+                <span>{item.classification.replaceAll('_', ' ')}</span>
+                <strong>{item.count}</strong>
+                <small>{money(item.amount_paise)}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div class="empty">No exceptions to chart</div>
+      )}
+    </section>
   )
 }
 

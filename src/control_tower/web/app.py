@@ -211,6 +211,10 @@ def create_app(
     def action_history(exception_id: str, _principal: Authenticated):
         return [_json(item) for item in exceptions.actions(exception_id)]
 
+    @app.get("/api/exception-summary")
+    def exception_summary(_principal: Authenticated):
+        return [_json(item) for item in exceptions.classification_summary()]
+
     @app.post("/api/exceptions/{exception_id}/{action}")
     def act_on_exception(
         exception_id: str,
