@@ -12,6 +12,14 @@ uv run control-tower-generate --help
 uv run control-tower-web
 ```
 
+Rebuild the Preact frontend after changing `frontend/src`:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
 The console is available at `http://127.0.0.1:8000`. Configure paths and bearer
 identities with the variables shown in `.env.example`. Treat tokens as secrets;
 the checked-in values are examples only.

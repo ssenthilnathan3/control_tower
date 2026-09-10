@@ -6,6 +6,7 @@ from typing import Annotated
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from control_tower.canonical import (
@@ -83,6 +84,8 @@ def create_app(
     closes = CloseControlRepository(ingestion.engine)
     canonical = CanonicalRepository(ingestion.engine)
     app = FastAPI(title="Co-lending Control Tower", version="0.1.0")
+    ui_root = Path(__file__).with_name("ui") / "dist"
+    app.mount("/assets", StaticFiles(directory=ui_root / "assets"), name="ui-assets")
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_request, error: ValueError):
@@ -90,7 +93,7 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(Path(__file__).with_name("ui") / "index.html")
+        return FileResponse(ui_root / "index.html")
 
     @app.get("/api/me")
     def me(principal: Authenticated):

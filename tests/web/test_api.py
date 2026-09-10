@@ -34,7 +34,11 @@ def _headers(token: str) -> dict[str, str]:
 def test_requires_server_configured_identity(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
-    assert client.get("/").status_code == 200
+    page = client.get("/")
+    assert page.status_code == 200
+    assert '<div id="app"></div>' in page.text
+    asset_path = page.text.split('src="')[1].split('"')[0]
+    assert client.get(asset_path).status_code == 200
     assert client.get("/api/exceptions").status_code == 401
     assert client.get("/api/exceptions", headers=_headers("unknown")).status_code == 401
     me = client.get("/api/me", headers=_headers("operator-token"))
