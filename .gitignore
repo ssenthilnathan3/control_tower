@@ -21,6 +21,7 @@ htmlcov/
 
 # Generated assessment data
 generated/
+evidence/
 
 # Confidential assessment material
 docs/reference/*.pdf
