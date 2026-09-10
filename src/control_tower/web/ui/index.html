@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control Tower</title>
+  <style>
+    :root { --ink:#17211d; --paper:#f2efe7; --panel:#fffdf8; --line:#c9c4b8; --red:#a53b2b; --green:#23664f; --amber:#b27716; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font:15px/1.45 Georgia, serif; }
+    header { display:flex; justify-content:space-between; align-items:end; padding:22px 4vw 16px; border-bottom:3px double var(--ink); }
+    h1 { margin:0; font-size:clamp(25px,4vw,42px); letter-spacing:-.04em; }
+    h2 { margin:0 0 12px; font-size:18px; text-transform:uppercase; letter-spacing:.08em; }
+    button,input { font:inherit; }
+    button { border:1px solid var(--ink); background:var(--ink); color:white; padding:8px 12px; cursor:pointer; }
+    button.secondary { color:var(--ink); background:transparent; }
+    input { border:1px solid var(--line); background:white; padding:8px; min-width:0; }
+    main { display:grid; grid-template-columns:1fr 2fr; gap:18px; padding:22px 4vw 50px; }
+    section { background:var(--panel); border:1px solid var(--line); padding:18px; box-shadow:3px 3px 0 #ded9ce; }
+    .wide { grid-column:1/-1; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+    .metric-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+    .metric { border-top:3px solid var(--ink); padding-top:8px; }
+    .metric b { display:block; font-size:25px; }
+    table { border-collapse:collapse; width:100%; font-family:ui-monospace, monospace; font-size:12px; }
+    th,td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+    tr[data-id] { cursor:pointer; }
+    tr[data-id]:hover { background:#eee9dd; }
+    .P1,.HOLD { color:var(--red); font-weight:bold; } .CLOSE { color:var(--green); font-weight:bold; }
+    #notice { min-height:22px; color:var(--red); }
+    dialog { width:min(700px,92vw); border:2px solid var(--ink); background:var(--panel); padding:20px; }
+    dialog::backdrop { background:#17211daa; }
+    pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+    @media (max-width:780px) { main { grid-template-columns:1fr; } .wide { grid-column:auto; } header { align-items:start; flex-direction:column; gap:10px; } .metric-grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header><div><small>CO-LENDING OPERATIONS</small><h1>Control Tower</h1></div><div id="identity">Not authenticated</div></header>
+  <main>
+    <section>
+      <h2>Access</h2>
+      <div class="toolbar"><input id="token" type="password" placeholder="Bearer token"><button onclick="login()">Connect</button></div>
+      <div id="notice"></div>
+    </section>
+    <section>
+      <h2>Run Control</h2>
+      <div class="toolbar"><input id="directory" value="." aria-label="Input directory"><button onclick="ingest()">Ingest</button><button onclick="reconcile()">Reconcile</button><button onclick="closeRun()">Decide close</button><button class="secondary" onclick="refresh()">Refresh</button></div>
+      <small>Input directory is relative to the configured server input root.</small>
+    </section>
+    <section class="wide">
+      <h2>Latest Close</h2><div id="scorecard" class="metric-grid"><div class="metric">No close decision</div></div>
+    </section>
+    <section class="wide">
+      <h2>Exception Queue</h2>
+      <div style="overflow:auto"><table><thead><tr><th>Priority</th><th>Partner</th><th>Class</th><th>Exposure</th><th>Status</th><th>Owner</th></tr></thead><tbody id="exceptions"></tbody></table></div>
+    </section>
+    <section><h2>Ingestion Runs</h2><div id="ingestion"></div></section>
+    <section><h2>Reconciliation Runs</h2><div id="reconciliation"></div></section>
+  </main>
+  <dialog id="detail"><button style="float:right" onclick="detail.close()">Close</button><h2>Exception</h2><pre id="detailBody"></pre><div class="toolbar"><button onclick="action('investigate')">Investigate</button><button onclick="action('request-resolution')">Request resolution</button><button onclick="action('approve')">Approve</button><button class="secondary" onclick="action('reject')">Reject</button></div></dialog>
+  <script>
+    let token='', selected='', ingestionRuns=[], reconciliationRuns=[]; const $=id=>document.getElementById(id);
+    async function api(path, options={}) { options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`,'Content-Type':'application/json'}; const r=await fetch(path,options); if(!r.ok) throw new Error((await r.json()).detail||r.statusText); return r.json(); }
+    function money(p){ return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR'}).format(p/100); }
+    function esc(v){ const e=document.createElement('span'); e.textContent=String(v); return e.innerHTML; }
+    async function login(){ token=$('token').value; try { const me=await api('/api/me'); $('identity').textContent=`${me.actor} · ${me.role}`; $('notice').textContent=''; refresh(); } catch(e){ $('notice').textContent=e.message; } }
+    async function refresh(){ try { const [ex,ir,rr,cl]=await Promise.all([api('/api/exceptions'),api('/api/ingestion-runs'),api('/api/reconciliation-runs'),api('/api/close-decisions')]); ingestionRuns=ir; reconciliationRuns=rr; $('exceptions').innerHTML=ex.map(x=>`<tr data-id="${esc(x.exception_id)}" onclick="show('${esc(x.exception_id)}')"><td class="${esc(x.priority)}">${esc(x.priority)}</td><td>${esc(x.partner_code)}</td><td>${esc(x.classification)}</td><td>${money(x.amount_paise)}</td><td>${esc(x.status)}</td><td>${esc(x.assignee||x.owner)}</td></tr>`).join(''); $('ingestion').innerHTML=ir.map(x=>`<p><b>${esc(x.status)}</b><br><small>${esc(x.run_key.slice(0,16))} · ${x.control_ids.length} controls</small></p>`).join('')||'No runs'; $('reconciliation').innerHTML=rr.map(x=>`<p><b>${esc(x.rule_version)}</b><br><small>${esc(x.run_key.slice(0,16))}</small></p>`).join('')||'No runs'; renderClose(cl[0]); } catch(e){ $('notice').textContent=e.message; } }
+    function renderClose(x){ $('scorecard').innerHTML=x?`<div class="metric"><span>Decision</span><b class="${x.outcome}">${x.outcome}</b></div><div class="metric"><span>Matched</span><b>${money(x.scorecard.matched_value_paise)}</b></div><div class="metric"><span>Unresolved</span><b>${money(x.scorecard.unresolved_value_paise)}</b></div>`:'<div class="metric">No close decision</div>'; }
+    async function show(id){ selected=id; const actions=await api(`/api/exceptions/${id}/actions`); $('detailBody').textContent=JSON.stringify(actions,null,2); $('detail').showModal(); }
+    async function action(name){ const reason=prompt('Reason for this action'); if(!reason)return; try{ await api(`/api/exceptions/${selected}/${name}`,{method:'POST',body:JSON.stringify({reason})}); $('detail').close(); refresh(); }catch(e){alert(e.message);} }
+    async function ingest(){ try{ await api('/api/ingestion-runs',{method:'POST',body:JSON.stringify({directory:$('directory').value})}); refresh(); }catch(e){$('notice').textContent=e.message;} }
+    async function reconcile(){ try{ await api('/api/reconciliation-runs',{method:'POST',body:'{}'}); refresh(); }catch(e){$('notice').textContent=e.message;} }
+    async function closeRun(){ if(!ingestionRuns[0]||!reconciliationRuns[0])return $('notice').textContent='Ingest and reconcile first'; try{ const result=await api('/api/close-decisions',{method:'POST',body:JSON.stringify({ingestion_run_key:ingestionRuns[0].run_key,reconciliation_run_key:reconciliationRuns[0].run_key})}); renderClose(result); }catch(e){$('notice').textContent=e.message;} }
+  </script>
+</body>
+</html>
