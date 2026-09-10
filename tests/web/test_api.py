@@ -66,8 +66,20 @@ def test_operator_journey_and_approver_boundary(tmp_path: Path) -> None:
     reconciled = client.post("/api/reconciliation-runs", headers=operator)
     assert reconciled.status_code == 200
     reconciliation_run_key = reconciled.json()["reconciliation"]["run_key"]
-    queue = client.get("/api/exceptions", headers=operator).json()
+    queue_response = client.get("/api/exceptions", headers=operator).json()
+    queue = queue_response["items"]
     assert queue
+    assert queue_response["total"] >= len(queue)
+    page = client.get("/api/exceptions?limit=2&offset=2", headers=operator).json()
+    assert page["limit"] == 2
+    assert page["offset"] == 2
+    assert len(page["items"]) == 2
+    classification = queue[0]["classification"]
+    filtered = client.get(
+        f"/api/exceptions?classification={classification}&limit=2", headers=operator
+    ).json()
+    assert filtered["total"] >= 1
+    assert all(item["classification"] == classification for item in filtered["items"])
 
     exception_id = queue[0]["exception_id"]
     reason = {"reason": "source evidence checked"}

@@ -205,3 +205,7 @@ class ReconciliationRepository:
                 )
                 for record in records
             ]
+
+    def run_count(self) -> int:
+        with Session(self.engine) as session:
+            return len(session.scalars(select(ReconciliationRunRecord.id)).all())

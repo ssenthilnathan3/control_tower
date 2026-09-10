@@ -246,6 +246,10 @@ class IngestionRegistry:
             )
             return [self._run_snapshot(session, record) for record in records]
 
+    def ingestion_run_count(self) -> int:
+        with Session(self.engine) as session:
+            return len(session.scalars(select(IngestionRunRecord.id)).all())
+
     @staticmethod
     def _run_snapshot(session: Session, record: IngestionRunRecord) -> IngestionRun:
         control_ids = tuple(

@@ -462,9 +462,39 @@ class ExceptionRepository:
             )
         )
 
-    def count(self) -> int:
+    def count(
+        self,
+        status: ExceptionStatus | None = None,
+        partner_code: str | None = None,
+        priority: str | None = None,
+        classification: str | None = None,
+        owner: str | None = None,
+        min_amount_paise: int | None = None,
+    ) -> int:
         with Session(self.engine) as session:
-            return len(session.scalars(select(ExceptionRecord.id)).all())
+            statement = select(ExceptionRecord.id)
+            if status is not None:
+                statement = statement.where(ExceptionRecord.status == status.value)
+            if partner_code is not None:
+                statement = statement.where(
+                    ExceptionRecord.partner_code.ilike(f"%{partner_code}%")
+                )
+            if priority:
+                statement = statement.where(ExceptionRecord.priority == priority)
+            if classification:
+                statement = statement.where(
+                    ExceptionRecord.classification.ilike(f"%{classification}%")
+                )
+            if owner:
+                statement = statement.where(
+                    ExceptionRecord.owner.ilike(f"%{owner}%")
+                    | ExceptionRecord.assignee.ilike(f"%{owner}%")
+                )
+            if min_amount_paise is not None:
+                statement = statement.where(
+                    ExceptionRecord.amount_paise >= min_amount_paise
+                )
+            return len(session.scalars(statement).all())
 
     def list(
         self,
@@ -472,6 +502,10 @@ class ExceptionRepository:
         offset: int = 0,
         status: ExceptionStatus | None = None,
         partner_code: str | None = None,
+        priority: str | None = None,
+        classification: str | None = None,
+        owner: str | None = None,
+        min_amount_paise: int | None = None,
     ) -> list[ExceptionSummary]:
         if not 1 <= limit <= 200 or offset < 0:
             raise ValueError("limit must be 1..200 and offset cannot be negative")
@@ -479,7 +513,24 @@ class ExceptionRepository:
         if status is not None:
             statement = statement.where(ExceptionRecord.status == status.value)
         if partner_code is not None:
-            statement = statement.where(ExceptionRecord.partner_code == partner_code)
+            statement = statement.where(
+                ExceptionRecord.partner_code.ilike(f"%{partner_code}%")
+            )
+        if priority:
+            statement = statement.where(ExceptionRecord.priority == priority)
+        if classification:
+            statement = statement.where(
+                ExceptionRecord.classification.ilike(f"%{classification}%")
+            )
+        if owner:
+            statement = statement.where(
+                ExceptionRecord.owner.ilike(f"%{owner}%")
+                | ExceptionRecord.assignee.ilike(f"%{owner}%")
+            )
+        if min_amount_paise is not None:
+            statement = statement.where(
+                ExceptionRecord.amount_paise >= min_amount_paise
+            )
         statement = statement.order_by(ExceptionRecord.id).limit(limit).offset(offset)
         with Session(self.engine) as session:
             return [self._summary(record) for record in session.scalars(statement)]

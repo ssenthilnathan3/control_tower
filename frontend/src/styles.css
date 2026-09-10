@@ -789,3 +789,134 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+.table-scroll.fixed {
+  height: 480px;
+  overflow: auto;
+}
+.table-scroll.fixed thead {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  box-shadow: 0 1px 0 var(--border);
+}
+.filter-row th {
+  padding: 7px 6px;
+  background: #f7f7f8;
+}
+.filter-row input,
+.filter-row select {
+  width: 100%;
+  min-width: 86px;
+  height: 29px;
+  border: 1px solid #dedee2;
+  border-radius: 5px;
+  background: #fff;
+  padding: 4px 6px;
+  color: #52525b;
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  outline: none;
+}
+.filter-row input:focus,
+.filter-row select:focus {
+  border-color: #a1a1aa;
+}
+.table-loader {
+  height: 64px;
+  text-align: center;
+  color: var(--muted) !important;
+}
+.table-loader svg {
+  vertical-align: middle;
+  margin-right: 8px;
+}
+.spinner {
+  animation: spin 0.75s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.progress-line {
+  position: fixed;
+  top: 63px;
+  left: 232px;
+  right: 0;
+  height: 2px;
+  z-index: 40;
+  overflow: hidden;
+  background: #dbeafe;
+}
+.progress-line:after {
+  content: '';
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: var(--blue);
+  animation: progress 1s ease-in-out infinite;
+}
+@keyframes progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(385%);
+  }
+}
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.role-option .spinner {
+  margin-left: auto;
+}
+@media (max-width: 940px) {
+  .progress-line {
+    left: 0;
+  }
+}
+@media (max-width: 600px) {
+  .table-scroll.fixed {
+    height: 420px;
+  }
+  .filter-row th:nth-child(3),
+  .filter-row th:nth-child(5) {
+    display: none;
+  }
+}
+.loading-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.pagination {
+  min-height: 50px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+}
+.pagination > div {
+  display: flex;
+  gap: 7px;
+}
+.table-scroll.fixed {
+  height: 480px;
+  max-height: 480px;
+  overflow-x: auto;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.table-scroll.fixed table {
+  min-width: 760px;
+}

@@ -7,6 +7,7 @@ import {
   Database,
   FileCheck2,
   LayoutDashboard,
+  LoaderCircle,
   LogOut,
   Menu,
   Play,
@@ -39,12 +40,16 @@ function Badge({ value }) {
 
 function Login({ onLogin }) {
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState('')
   const choose = async (token) => {
     try {
       setError('')
+      setLoading(token)
       await onLogin(token)
     } catch (e) {
       setError(e.message)
+    } finally {
+      setLoading('')
     }
   }
   return (
@@ -54,7 +59,11 @@ function Login({ onLogin }) {
         <h1>Control Tower</h1>
         <p>Choose a workspace role to continue.</p>
         <div class="role-options">
-          <button class="role-option" onClick={() => choose('operator-demo')}>
+          <button
+            class="role-option"
+            disabled={Boolean(loading)}
+            onClick={() => choose('operator-demo')}
+          >
             <div class="role-icon">
               <Activity size={19} />
             </div>
@@ -62,8 +71,15 @@ function Login({ onLogin }) {
               <strong>Operations</strong>
               <span>Investigate and resolve exceptions</span>
             </div>
+            {loading === 'operator-demo' && (
+              <LoaderCircle class="spinner" size={17} />
+            )}
           </button>
-          <button class="role-option" onClick={() => choose('approver-demo')}>
+          <button
+            class="role-option"
+            disabled={Boolean(loading)}
+            onClick={() => choose('approver-demo')}
+          >
             <div class="role-icon approver">
               <ShieldCheck size={19} />
             </div>
@@ -71,6 +87,9 @@ function Login({ onLogin }) {
               <strong>Approver</strong>
               <span>Review approvals and decide close</span>
             </div>
+            {loading === 'approver-demo' && (
+              <LoaderCircle class="spinner" size={17} />
+            )}
           </button>
         </div>
         {error && <div class="form-error">{error}</div>}
@@ -87,14 +106,27 @@ function App() {
   const [user, setUser] = useState(null)
   const [restoring, setRestoring] = useState(Boolean(token))
   const [exceptions, setExceptions] = useState([])
+  const [exceptionPage, setExceptionPage] = useState({
+    total: 0,
+    limit: 25,
+    offset: 0,
+  })
   const [ingestion, setIngestion] = useState([])
   const [reconciliation, setReconciliation] = useState([])
   const [closes, setCloses] = useState([])
   const [selected, setSelected] = useState(null)
   const [actions, setActions] = useState([])
-  const [status, setStatus] = useState('')
+  const [filters, setFilters] = useState({
+    priority: '',
+    partner: '',
+    classification: '',
+    status: '',
+    owner: '',
+    exposure: '',
+  })
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState('')
+  const [loading, setLoading] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
   const [view, setView] = useState('overview')
 
@@ -127,28 +159,53 @@ function App() {
     setUser(null)
   }
   const refresh = async () => {
+    setLoading(true)
     try {
-      const query = status ? `?status=${status}` : ''
+      const exceptionQuery = new URLSearchParams({
+        limit: String(exceptionPage.limit),
+        offset: String(exceptionPage.offset),
+      })
+      if (filters.priority) exceptionQuery.set('priority', filters.priority)
+      if (filters.partner) exceptionQuery.set('partner_code', filters.partner)
+      if (filters.classification)
+        exceptionQuery.set(
+          'classification',
+          filters.classification.replaceAll(' ', '_'),
+        )
+      if (filters.status) exceptionQuery.set('status', filters.status)
+      if (filters.owner) exceptionQuery.set('owner', filters.owner)
+      if (filters.exposure)
+        exceptionQuery.set(
+          'min_amount_paise',
+          String(Number(filters.exposure) * 100),
+        )
       const [queue, ingestions, reconciliations, decisions] = await Promise.all(
         [
-          api(`/api/exceptions${query}`),
+          api(`/api/exceptions?${exceptionQuery}`),
           api('/api/ingestion-runs'),
           api('/api/reconciliation-runs'),
           api('/api/close-decisions'),
         ],
       )
-      setExceptions(queue)
-      setIngestion(ingestions)
-      setReconciliation(reconciliations)
-      setCloses(decisions)
+      setExceptions(queue.items)
+      setExceptionPage({
+        total: queue.total,
+        limit: queue.limit,
+        offset: queue.offset,
+      })
+      setIngestion(ingestions.items)
+      setReconciliation(reconciliations.items)
+      setCloses(decisions.items)
       setNotice('')
     } catch (e) {
       setNotice(e.message)
+    } finally {
+      setLoading(false)
     }
   }
   useEffect(() => {
     if (user) refresh()
-  }, [user, status])
+  }, [user, exceptionPage.offset, filters])
   useEffect(() => {
     if (!token || user) return
     api('/api/me', {}, token)
@@ -194,8 +251,16 @@ function App() {
       })
     })
   const openException = async (item) => {
-    setSelected(item)
-    setActions(await api(`/api/exceptions/${item.exception_id}/actions`))
+    setBusy('detail')
+    try {
+      setSelected(item)
+      setActions(await api(`/api/exceptions/${item.exception_id}/actions`))
+    } catch (e) {
+      setSelected(null)
+      setNotice(e.message)
+    } finally {
+      setBusy('')
+    }
   }
   const exceptionAction = async (action) => {
     const reason = prompt('Reason for this action')
@@ -217,6 +282,23 @@ function App() {
     )
   if (!user) return <Login onLogin={login} />
   const close = closes[0]
+  const filteredExceptions = exceptions.filter((item) => {
+    const includes = (value, query) =>
+      String(value || '')
+        .toLowerCase()
+        .includes(query.trim().toLowerCase())
+    return (
+      (!filters.priority || item.priority === filters.priority) &&
+      includes(item.partner_code, filters.partner) &&
+      includes(
+        item.classification.replaceAll('_', ' '),
+        filters.classification,
+      ) &&
+      (!filters.status || item.status === filters.status) &&
+      includes(item.assignee || item.owner, filters.owner) &&
+      (!filters.exposure || item.amount_paise >= Number(filters.exposure) * 100)
+    )
+  })
   const titles = {
     overview: [
       'Operations overview',
@@ -299,18 +381,31 @@ function App() {
             <span>{titles[view][1]}</span>
           </div>
           <div class="header-actions">
-            <button class="button" onClick={refresh}>
-              <RefreshCw size={15} />
-              Refresh
+            <button class="button" disabled={loading} onClick={refresh}>
+              {loading ? (
+                <LoaderCircle class="spinner" size={15} />
+              ) : (
+                <RefreshCw size={15} />
+              )}
+              {loading ? 'Loading...' : 'Refresh'}
             </button>
             {view !== 'exceptions' && (
-              <button class="button primary" onClick={reconcile}>
-                <Play size={15} />
-                Run reconciliation
+              <button
+                class="button primary"
+                disabled={Boolean(busy)}
+                onClick={reconcile}
+              >
+                {busy === 'reconcile' ? (
+                  <LoaderCircle class="spinner" size={15} />
+                ) : (
+                  <Play size={15} />
+                )}
+                {busy === 'reconcile' ? 'Reconciling...' : 'Run reconciliation'}
               </button>
             )}
           </div>
         </header>
+        {(loading || busy) && <div class="progress-line" />}
         <div class="page">
           {notice && (
             <div class="notice">
@@ -362,6 +457,7 @@ function App() {
                   onOpen={openException}
                   title="Recent exceptions"
                   subtitle="Latest items requiring attention"
+                  loading={busy === 'detail'}
                 />
                 <aside class="runs">
                   <RunPanel
@@ -391,54 +487,65 @@ function App() {
                     Every unresolved amount has an owner, SLA, and audit trail.
                   </p>
                 </div>
-                <div class="search-filter">
-                  <Search size={15} />
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.currentTarget.value)}
-                  >
-                    <option value="">All statuses</option>
-                    <option>OPEN</option>
-                    <option>INVESTIGATING</option>
-                    <option>PENDING_APPROVAL</option>
-                    <option>REOPENED</option>
-                    <option>RESOLVED</option>
-                  </select>
-                </div>
+                <button
+                  class="button"
+                  onClick={() =>
+                    setFilters({
+                      priority: '',
+                      partner: '',
+                      classification: '',
+                      status: '',
+                      owner: '',
+                      exposure: '',
+                    })
+                  }
+                >
+                  Clear filters
+                </button>
               </section>
               <section class="metrics compact">
                 <Metric
                   label="Items in view"
-                  value={exceptions.length}
+                  value={filteredExceptions.length}
                   detail="Filtered queue"
                 />
                 <Metric
                   label="Queue exposure"
                   value={money(
-                    exceptions.reduce((sum, x) => sum + x.amount_paise, 0),
+                    filteredExceptions.reduce(
+                      (sum, x) => sum + x.amount_paise,
+                      0,
+                    ),
                   )}
                   detail="Gross unresolved value"
                 />
                 <Metric
                   label="Pending approval"
                   value={
-                    exceptions.filter((x) => x.status === 'PENDING_APPROVAL')
-                      .length
+                    filteredExceptions.filter(
+                      (x) => x.status === 'PENDING_APPROVAL',
+                    ).length
                   }
                   detail="Needs approver action"
                 />
                 <Metric
                   label="P1 items"
-                  value={exceptions.filter((x) => x.priority === 'P1').length}
+                  value={
+                    filteredExceptions.filter((x) => x.priority === 'P1').length
+                  }
                   detail="Highest priority"
                   danger
                 />
               </section>
               <ExceptionTable
-                items={exceptions}
+                items={filteredExceptions}
                 onOpen={openException}
                 title="All exceptions"
-                subtitle={`${exceptions.length} records`}
+                subtitle={`${filteredExceptions.length} of ${exceptions.length} records`}
+                filters={filters}
+                setFilters={setFilters}
+                loading={busy === 'detail'}
+                fixed
               />
             </>
           )}
@@ -450,13 +557,29 @@ function App() {
                   <p>Execution history and reproducible control decisions.</p>
                 </div>
                 <div class="header-actions">
-                  <button class="button" onClick={ingest}>
-                    <Database size={15} />
-                    Ingest
+                  <button
+                    class="button"
+                    disabled={Boolean(busy)}
+                    onClick={ingest}
+                  >
+                    {busy === 'ingest' ? (
+                      <LoaderCircle class="spinner" size={15} />
+                    ) : (
+                      <Database size={15} />
+                    )}
+                    {busy === 'ingest' ? 'Ingesting...' : 'Ingest'}
                   </button>
-                  <button class="button primary" onClick={reconcile}>
-                    <Play size={15} />
-                    Reconcile
+                  <button
+                    class="button primary"
+                    disabled={Boolean(busy)}
+                    onClick={reconcile}
+                  >
+                    {busy === 'reconcile' ? (
+                      <LoaderCircle class="spinner" size={15} />
+                    ) : (
+                      <Play size={15} />
+                    )}
+                    {busy === 'reconcile' ? 'Reconciling...' : 'Reconcile'}
                   </button>
                 </div>
               </section>
@@ -517,6 +640,12 @@ function App() {
               </div>
               <h3 class="section-title">Activity history</h3>
               <div class="timeline">
+                {busy === 'detail' && (
+                  <div class="loading-inline">
+                    <LoaderCircle class="spinner" size={18} />
+                    Loading activity...
+                  </div>
+                )}
                 {actions.map((action) => (
                   <div class="timeline-item">
                     <i />
@@ -533,27 +662,43 @@ function App() {
             </div>
             <div class="drawer-actions">
               <button
+                disabled={Boolean(busy)}
                 class="button"
                 onClick={() => exceptionAction('investigate')}
               >
+                {busy === 'investigate' && (
+                  <LoaderCircle class="spinner" size={14} />
+                )}
                 Investigate
               </button>
               <button
+                disabled={Boolean(busy)}
                 class="button"
                 onClick={() => exceptionAction('request-resolution')}
               >
+                {busy === 'request-resolution' && (
+                  <LoaderCircle class="spinner" size={14} />
+                )}
                 Request resolution
               </button>
               <button
+                disabled={Boolean(busy)}
                 class="button primary"
                 onClick={() => exceptionAction('approve')}
               >
+                {busy === 'approve' && (
+                  <LoaderCircle class="spinner" size={14} />
+                )}
                 Approve
               </button>
               <button
+                disabled={Boolean(busy)}
                 class="button danger"
                 onClick={() => exceptionAction('reject')}
               >
+                {busy === 'reject' && (
+                  <LoaderCircle class="spinner" size={14} />
+                )}
                 Reject
               </button>
             </div>
@@ -608,7 +753,20 @@ function ScoreMetrics({ close, exceptions }) {
     </section>
   )
 }
-function ExceptionTable({ items, onOpen, title, subtitle }) {
+function ExceptionTable({
+  items,
+  onOpen,
+  title,
+  subtitle,
+  filters,
+  setFilters,
+  loading,
+  fixed,
+  page,
+  onPage,
+}) {
+  const update = (name, value) =>
+    setFilters?.((current) => ({ ...current, [name]: value }))
   return (
     <section class="panel queue">
       <div class="panel-head">
@@ -617,7 +775,7 @@ function ExceptionTable({ items, onOpen, title, subtitle }) {
           <span>{subtitle}</span>
         </div>
       </div>
-      <div class="table-scroll">
+      <div class={fixed ? 'table-scroll fixed' : 'table-scroll'}>
         <table>
           <thead>
             <tr>
@@ -628,8 +786,76 @@ function ExceptionTable({ items, onOpen, title, subtitle }) {
               <th>Owner</th>
               <th class="right">Exposure</th>
             </tr>
+            {filters && (
+              <tr class="filter-row">
+                <th>
+                  <select
+                    value={filters.priority}
+                    onChange={(e) => update('priority', e.currentTarget.value)}
+                  >
+                    <option value="">All</option>
+                    <option>P1</option>
+                    <option>P2</option>
+                    <option>P3</option>
+                  </select>
+                </th>
+                <th>
+                  <input
+                    value={filters.partner}
+                    onInput={(e) => update('partner', e.currentTarget.value)}
+                    placeholder="Filter partner"
+                  />
+                </th>
+                <th>
+                  <input
+                    value={filters.classification}
+                    onInput={(e) =>
+                      update('classification', e.currentTarget.value)
+                    }
+                    placeholder="Filter class"
+                  />
+                </th>
+                <th>
+                  <select
+                    value={filters.status}
+                    onChange={(e) => update('status', e.currentTarget.value)}
+                  >
+                    <option value="">All</option>
+                    <option>OPEN</option>
+                    <option>INVESTIGATING</option>
+                    <option>PENDING_APPROVAL</option>
+                    <option>REOPENED</option>
+                    <option>RESOLVED</option>
+                  </select>
+                </th>
+                <th>
+                  <input
+                    value={filters.owner}
+                    onInput={(e) => update('owner', e.currentTarget.value)}
+                    placeholder="Filter owner"
+                  />
+                </th>
+                <th>
+                  <input
+                    type="number"
+                    min="0"
+                    value={filters.exposure}
+                    onInput={(e) => update('exposure', e.currentTarget.value)}
+                    placeholder="Min INR"
+                  />
+                </th>
+              </tr>
+            )}
           </thead>
           <tbody>
+            {loading && (
+              <tr>
+                <td colspan="6" class="table-loader">
+                  <LoaderCircle class="spinner" size={20} />
+                  Loading details...
+                </td>
+              </tr>
+            )}
             {items.map((item) => (
               <tr onClick={() => onOpen(item)}>
                 <td>
@@ -654,6 +880,31 @@ function ExceptionTable({ items, onOpen, title, subtitle }) {
           </tbody>
         </table>
       </div>
+      {page && (
+        <div class="pagination">
+          <span>
+            {page.total
+              ? `${page.offset + 1}-${Math.min(page.offset + page.limit, page.total)} of ${page.total}`
+              : '0 records'}
+          </span>
+          <div>
+            <button
+              class="button small"
+              disabled={loading || page.offset === 0}
+              onClick={() => onPage(Math.max(0, page.offset - page.limit))}
+            >
+              Previous
+            </button>
+            <button
+              class="button small"
+              disabled={loading || page.offset + page.limit >= page.total}
+              onClick={() => onPage(page.offset + page.limit)}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
@@ -665,7 +916,8 @@ function RunPanel({ title, icon: Icon, items, action, busy, limit = 4 }) {
           <Icon size={17} />
           <h3>{title}</h3>
         </div>
-        <button class="button small" onClick={action}>
+        <button class="button small" disabled={busy} onClick={action}>
+          {busy && <LoaderCircle class="spinner" size={13} />}
           {busy ? 'Running...' : 'New run'}
         </button>
       </div>
@@ -692,7 +944,8 @@ function CloseHistory({ items, onDecide, busy }) {
           <h3>Close decisions</h3>
           <span>Persisted policy outcomes</span>
         </div>
-        <button class="button small" onClick={onDecide}>
+        <button class="button small" disabled={busy} onClick={onDecide}>
+          {busy && <LoaderCircle class="spinner" size={13} />}
           {busy ? 'Calculating...' : 'Decide close'}
         </button>
       </div>

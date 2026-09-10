@@ -179,6 +179,10 @@ class CloseControlRepository:
                 for record in records
             ]
 
+    def count(self) -> int:
+        with Session(self.engine) as session:
+            return len(session.scalars(select(CloseDecisionRecord.id)).all())
+
     @staticmethod
     def _result(
         session: Session,

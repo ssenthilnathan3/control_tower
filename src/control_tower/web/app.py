@@ -108,9 +108,7 @@ def create_app(
             and settings.input_root not in requested.parents
         ):
             raise HTTPException(400, "input directory escapes configured root")
-        if not (requested / "feeds").is_dir() or not (
-            requested / "manifests"
-        ).is_dir():
+        if not (requested / "feeds").is_dir() or not (requested / "manifests").is_dir():
             raise HTTPException(
                 400,
                 "input directory must contain feeds/ and manifests/; "
@@ -127,7 +125,12 @@ def create_app(
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
     ):
-        return [_json(item) for item in ingestion.ingestion_runs(limit, offset)]
+        return {
+            "items": [_json(item) for item in ingestion.ingestion_runs(limit, offset)],
+            "total": ingestion.ingestion_run_count(),
+            "limit": limit,
+            "offset": offset,
+        }
 
     @app.post("/api/reconciliation-runs")
     def reconcile(principal: Authenticated):
@@ -155,7 +158,12 @@ def create_app(
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
     ):
-        return [_json(item) for item in reconciliation.runs(limit, offset)]
+        return {
+            "items": [_json(item) for item in reconciliation.runs(limit, offset)],
+            "total": reconciliation.run_count(),
+            "limit": limit,
+            "offset": offset,
+        }
 
     @app.get("/api/reconciliation-runs/{run_key}/decisions")
     def decisions(run_key: str, _principal: Authenticated):
@@ -168,10 +176,36 @@ def create_app(
         offset: int = Query(0, ge=0),
         status: ExceptionStatus | None = None,
         partner_code: str | None = None,
+        priority: str | None = None,
+        classification: str | None = None,
+        owner: str | None = None,
+        min_amount_paise: int | None = Query(None, ge=0),
     ):
-        return [
-            _json(item) for item in exceptions.list(limit, offset, status, partner_code)
-        ]
+        return {
+            "items": [
+                _json(item)
+                for item in exceptions.list(
+                    limit,
+                    offset,
+                    status,
+                    partner_code,
+                    priority,
+                    classification,
+                    owner,
+                    min_amount_paise,
+                )
+            ],
+            "total": exceptions.count(
+                status,
+                partner_code,
+                priority,
+                classification,
+                owner,
+                min_amount_paise,
+            ),
+            "limit": limit,
+            "offset": offset,
+        }
 
     @app.get("/api/exceptions/{exception_id}/actions")
     def action_history(exception_id: str, _principal: Authenticated):
@@ -244,7 +278,12 @@ def create_app(
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
     ):
-        return [_json(item) for item in closes.list(limit, offset)]
+        return {
+            "items": [_json(item) for item in closes.list(limit, offset)],
+            "total": closes.count(),
+            "limit": limit,
+            "offset": offset,
+        }
 
     return app
 
