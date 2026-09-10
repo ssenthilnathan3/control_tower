@@ -131,6 +131,11 @@ done when:
 - changing a threshold through config changes only the expected blockers
 - every scorecard number can be traced to source rows and decisions
 
+status: done. close scope is one reconciliation run plus explicitly selected
+delivery-control receipts. the result persists the snapshot and policy identity,
+actor, scorecard, ordered blockers, and deterministic decision hash. fresh-seed
+verification accounts for all 2,000 instructions by count and value.
+
 ## 7. expose the operator flow
 
 goal: demonstrate the required journey without turning the project into a

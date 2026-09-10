@@ -48,7 +48,7 @@ src/control_tower/
   canonical/       maps accepted rows to one event shape
   reconciliation/  owns match decisions and run identity
   exceptions/      owns investigation state and actions
-  close_control/   owns close-or-hold decisions                 [planned]
+  close_control/   owns close-or-hold decisions
 ```
 
 one module should not update another module's state directly. for example,
@@ -186,8 +186,8 @@ and encryption policies.
 - unresolved value cannot disappear when an exception is resolved
 - the same snapshot, config, and rule version produce the same close result
 
-exception transitions, approval separation, and action immutability have direct
-tests. close invariants are still target behavior.
+exception transitions, approval separation, action immutability, and close
+reproducibility have direct tests.
 
 ## matching
 
@@ -238,7 +238,12 @@ must give the runtime role insert-only access to action history as defense in de
 
 ## close control
 
-the close equation for each controlled scope will be:
+the Phase 1 close scope is explicit: one persisted reconciliation run and the
+selected ingestion delivery-control receipt IDs. this avoids a global rule where
+an old failed delivery blocks every future close. passed receipts must cover every
+artifact used by the reconciliation evidence.
+
+the close equation uses one originator instruction decision as the count unit:
 
 ```text
 accepted count = exact + composite + pending + unresolved
@@ -246,12 +251,19 @@ accepted value = exact + composite + pending + unresolved
 ```
 
 quarantined rows and artifact control failures sit outside accepted totals, but
-remain visible blockers. a `HOLD` result must list the record IDs and INR value
-that caused it.
+remain visible blockers. malformed quarantine amounts are recorded as unknown
+rather than guessed. each blocker stores its type, stable record ID, known paise
+value, reason, and evidence reference.
 
-what state needs to survive? the input snapshot, policy version, blocker IDs,
-decision, actor, and decision hash. without those fields we can display a close
-result but cannot reproduce it.
+`config/close_control.json` versions pending and unresolved value thresholds and
+whether quarantine or delivery-control failures block. approved exception workflow
+does not erase financial exposure; only a later reconciliation decision can change
+the close scorecard.
+
+the persisted result contains the reconciliation run and snapshot hashes, normalized
+policy hash and version, actor, outcome, complete scorecard, ordered blockers, and a
+deterministic decision hash. actor and time are recording metadata, not calculation
+inputs, so another operator replaying the same scope receives the original result.
 
 ## failure modes
 
@@ -285,6 +297,12 @@ decisions replay, while changed
 decisions refresh evidence and reopen resolved work. the close path must still not
 treat reconciliation alone as a complete control.
 
+### a close calculation is retried
+
+blockers are sorted before hashing. the reconciliation run, selected receipt IDs,
+scorecard, and normalized policy produce the same decision hash, so retry returns
+the stored result instead of creating another close decision.
+
 ### optional AI is unavailable
 
 nothing changes in Phase 1. ingestion, deterministic matching, exceptions, and
@@ -307,10 +325,9 @@ close must not depend on it.
 - what source identity is stable across corrected deliveries?
 - should a quarantined non-financial field always block close?
 - which statuses are final for each source?
-- can an approved unresolved item stop blocking close, and at what value?
 - what makes an override material?
 - how long must raw evidence and audit history be retained?
-- do we need one close decision per batch, partner, business date, or all three?
+- should Phase 2 replace explicit receipt scope with partner, batch, and business-date fields?
 
 these need answers before their behavior is coded. until then, assumptions stay
 explicit and configurable.
