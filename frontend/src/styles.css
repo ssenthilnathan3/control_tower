@@ -920,3 +920,34 @@ button:disabled {
 .table-scroll.fixed table {
   min-width: 760px;
 }
+.action-form {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.action-form label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.action-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #d4d4d8;
+  border-radius: 7px;
+  padding: 9px 10px;
+  font:
+    12px/1.5 'Inter Variable',
+    Inter,
+    sans-serif;
+  outline: none;
+}
+.action-form textarea:focus {
+  border-color: #71717a;
+  box-shadow: 0 0 0 3px #18181b0c;
+}
+.drawer-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

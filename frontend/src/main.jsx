@@ -116,6 +116,8 @@ function App() {
   const [closes, setCloses] = useState([])
   const [selected, setSelected] = useState(null)
   const [actions, setActions] = useState([])
+  const [actionReason, setActionReason] = useState('')
+  const [actionError, setActionError] = useState('')
   const [filters, setFilters] = useState({
     priority: '',
     partner: '',
@@ -254,6 +256,8 @@ function App() {
     setBusy('detail')
     try {
       setSelected(item)
+      setActionReason('')
+      setActionError('')
       setActions(await api(`/api/exceptions/${item.exception_id}/actions`))
     } catch (e) {
       setSelected(null)
@@ -263,15 +267,24 @@ function App() {
     }
   }
   const exceptionAction = async (action) => {
-    const reason = prompt('Reason for this action')
-    if (!reason) return
-    await run(action, () =>
-      api(`/api/exceptions/${selected.exception_id}/${action}`, {
+    if (!actionReason.trim()) {
+      setActionError('Enter a reason before continuing.')
+      return
+    }
+    setBusy(action)
+    setActionError('')
+    try {
+      await api(`/api/exceptions/${selected.exception_id}/${action}`, {
         method: 'POST',
-        body: JSON.stringify({ reason }),
-      }),
-    )
-    setSelected(null)
+        body: JSON.stringify({ reason: actionReason.trim() }),
+      })
+      await refresh()
+      setSelected(null)
+    } catch (e) {
+      setActionError(e.message)
+    } finally {
+      setBusy('')
+    }
   }
   if (restoring)
     return (
@@ -659,10 +672,24 @@ function App() {
                   </div>
                 ))}
               </div>
+              <div class="action-form">
+                <label for="action-reason">Action reason</label>
+                <textarea
+                  id="action-reason"
+                  rows="3"
+                  value={actionReason}
+                  onInput={(e) => setActionReason(e.currentTarget.value)}
+                  placeholder="Record evidence or rationale for this action"
+                />
+                {actionError && <div class="form-error">{actionError}</div>}
+              </div>
             </div>
             <div class="drawer-actions">
               <button
-                disabled={Boolean(busy)}
+                disabled={
+                  Boolean(busy) ||
+                  !['OPEN', 'REOPENED'].includes(selected.status)
+                }
                 class="button"
                 onClick={() => exceptionAction('investigate')}
               >
@@ -672,7 +699,7 @@ function App() {
                 Investigate
               </button>
               <button
-                disabled={Boolean(busy)}
+                disabled={Boolean(busy) || selected.status !== 'INVESTIGATING'}
                 class="button"
                 onClick={() => exceptionAction('request-resolution')}
               >
@@ -682,7 +709,9 @@ function App() {
                 Request resolution
               </button>
               <button
-                disabled={Boolean(busy)}
+                disabled={
+                  Boolean(busy) || selected.status !== 'PENDING_APPROVAL'
+                }
                 class="button primary"
                 onClick={() => exceptionAction('approve')}
               >
@@ -692,7 +721,9 @@ function App() {
                 Approve
               </button>
               <button
-                disabled={Boolean(busy)}
+                disabled={
+                  Boolean(busy) || selected.status !== 'PENDING_APPROVAL'
+                }
                 class="button danger"
                 onClick={() => exceptionAction('reject')}
               >
