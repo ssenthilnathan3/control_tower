@@ -1,6 +1,7 @@
 from .models import ReconciliationDecision, ReconciliationOutcome, ReconciliationPolicy
 from .repository import (
     PersistedDecision,
+    PersistedRun,
     ReconciliationRepository,
     ReconciliationWriteOutcome,
 )
@@ -9,6 +10,7 @@ from .service import ReconciliationResult, run_reconciliation
 __all__ = [
     "EvaluationFailure",
     "PersistedDecision",
+    "PersistedRun",
     "ReconciliationDecision",
     "ReconciliationOutcome",
     "ReconciliationPolicy",

@@ -85,6 +85,15 @@ class PersistedDecision:
     source_version_ids: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class PersistedRun:
+    run_key: str
+    snapshot_hash: str
+    config_hash: str
+    rule_version: str
+    created_at: datetime
+
+
 class ReconciliationRepository:
     def __init__(self, engine):
         self.engine = engine
@@ -158,3 +167,20 @@ class ReconciliationRepository:
                 )
                 for decision in sorted(run.decisions, key=lambda item: item.id)
             ]
+
+    def run(self, run_key: str) -> PersistedRun:
+        with Session(self.engine) as session:
+            run = session.scalar(
+                select(ReconciliationRunRecord).where(
+                    ReconciliationRunRecord.run_key == run_key
+                )
+            )
+            if run is None:
+                raise ValueError(f"reconciliation run does not exist: {run_key}")
+            return PersistedRun(
+                run.run_key,
+                run.snapshot_hash,
+                run.config_hash,
+                run.rule_version,
+                run.created_at,
+            )
