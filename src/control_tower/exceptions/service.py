@@ -13,7 +13,6 @@ BLOCKING_OUTCOMES = {
     ReconciliationOutcome.STATUS_MISMATCH,
     ReconciliationOutcome.MISSING_EVENT,
     ReconciliationOutcome.UNRESOLVED,
-    ReconciliationOutcome.TIMING_DIFFERENCE,
 }
 
 

@@ -1,6 +1,6 @@
 {
   "policy_version": "phase1-close-v1",
-  "max_pending_value_paise": 0,
+  "max_pending_value_paise": 10000000000,
   "max_unresolved_value_paise": 0,
   "block_on_quarantine": true,
   "block_on_control_failure": true

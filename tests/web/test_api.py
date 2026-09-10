@@ -167,7 +167,7 @@ def test_operator_journey_and_approver_boundary(tmp_path: Path) -> None:
     )
     assert final_close.status_code == 200
     assert final_close.json()["outcome"] == "CLOSE"
-    assert final_close.json()["scorecard"]["pending_count"] == 0
+    assert final_close.json()["scorecard"]["pending_count"] > 0
     assert final_close.json()["scorecard"]["unresolved_count"] == 0
     assert close.json()["outcome"] == "HOLD"
     assert close.json()["scorecard"]["accepted_count"] == 2000

@@ -18,12 +18,11 @@ BLOCKING = [
     ReconciliationOutcome.STATUS_MISMATCH,
     ReconciliationOutcome.MISSING_EVENT,
     ReconciliationOutcome.UNRESOLVED,
-    ReconciliationOutcome.TIMING_DIFFERENCE,
 ]
 
 
-@pytest.mark.parametrize("excluded", [ReconciliationOutcome.EXACT_MATCH])
-def test_queue_covers_actionable_value_and_excludes_matches(tmp_path, excluded) -> None:
+@pytest.mark.parametrize("excluded", [ReconciliationOutcome.TIMING_DIFFERENCE])
+def test_queue_covers_blocking_value_and_excludes_timing(tmp_path, excluded) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'coverage.db'}")
     reconciliation = ReconciliationRepository(engine)
     decisions = [
@@ -50,7 +49,7 @@ def test_queue_covers_actionable_value_and_excludes_matches(tmp_path, excluded) 
     with Session(engine) as session:
         classifications = set(session.scalars(select(ExceptionRecord.classification)))
     assert result.created_count == len(BLOCKING)
-    assert result.blocking_value_paise == sum(range(1, 7)) * 10000
-    assert result.blocking_value_paise / 100 == 2100
+    assert result.blocking_value_paise == sum(range(1, 6)) * 10000
+    assert result.blocking_value_paise / 100 == 1500
     assert classifications == {outcome.value for outcome in BLOCKING}
     assert excluded.value not in classifications

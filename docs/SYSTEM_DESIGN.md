@@ -261,9 +261,13 @@ rather than guessed. each blocker stores its type, stable record ID, known paise
 value, reason, and evidence reference.
 
 `config/close_control.json` versions pending and unresolved value thresholds and
-whether quarantine or delivery-control failures block. approved exception workflow
-does not erase financial exposure; only a later reconciliation decision can change
-the close scorecard.
+whether quarantine or delivery-control failures block. The demo permits up to INR 10
+crore of `TIMING_DIFFERENCE` exposure because that outcome is emitted only while the
+event remains inside the configured grace window. The amount stays explicitly
+pending in the scorecard and above-threshold pending exposure still blocks close.
+Approved confirmed exceptions remain linked to their original reconciliation
+decisions and audit history; close treats those authorised resolutions as cleared
+without rewriting source evidence or the deterministic decision.
 
 the persisted result contains the reconciliation run and snapshot hashes, normalized
 policy hash and version, actor, outcome, complete scorecard, ordered blockers, and a

@@ -42,10 +42,10 @@ def test_creates_one_exception_per_blocking_decision_and_replays(tmp_path) -> No
     first = create_exceptions("a" * 64, reconciliation, exceptions, detected_at)
     replay = create_exceptions("a" * 64, reconciliation, exceptions, detected_at)
 
-    assert first.created_count == 2
-    assert first.blocking_value_paise == 175000
-    assert replay.replayed_count == 2
-    assert exceptions.count() == 2
+    assert first.created_count == 1
+    assert first.blocking_value_paise == 125000
+    assert replay.replayed_count == 1
+    assert exceptions.count() == 1
     with Session(engine) as session:
         exception = session.scalar(
             select(ExceptionRecord).where(
