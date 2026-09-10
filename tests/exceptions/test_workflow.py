@@ -125,6 +125,27 @@ def test_approver_resolves_pending_exception(tmp_path) -> None:
         assert exception.status == "RESOLVED"
 
 
+def test_approver_resolves_all_exceptions_from_open(tmp_path) -> None:
+    engine, repository, _ = _queue(tmp_path)
+
+    resolved_count = repository.resolve_all(
+        "approver-1", ExceptionRole.APPROVER, "bulk review completed", NOW
+    )
+
+    with Session(engine) as session:
+        exception = session.scalar(select(ExceptionRecord))
+        actions = session.scalars(
+            select(ExceptionActionRecord).order_by(ExceptionActionRecord.id)
+        ).all()
+        assert resolved_count == 1
+        assert exception.status == "RESOLVED"
+        assert [action.action for action in actions[-3:]] == [
+            "INVESTIGATION_STARTED",
+            "RESOLUTION_REQUESTED",
+            "APPROVED",
+        ]
+
+
 def test_rejection_returns_to_investigation(tmp_path) -> None:
     engine, repository, exception_id = _queue(tmp_path)
     repository.start_investigation(

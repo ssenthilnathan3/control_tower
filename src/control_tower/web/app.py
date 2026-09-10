@@ -22,6 +22,7 @@ from control_tower.exceptions import (
     create_exceptions,
 )
 from control_tower.ingestion import IngestionRegistry, ingest_generated_feeds
+from control_tower.ingestion.registry import Base
 from control_tower.reconciliation import (
     ReconciliationPolicy,
     ReconciliationRepository,
@@ -61,9 +62,18 @@ class ExceptionActionRequest(BaseModel):
     material_override: bool = False
 
 
+class BulkExceptionActionRequest(BaseModel):
+    reason: str
+    exception_ids: list[str]
+
+
 class CloseRequest(BaseModel):
     reconciliation_run_key: str
     ingestion_run_key: str
+
+
+class RestartRequest(BaseModel):
+    directory: str = "development"
 
 
 def _json(value):
@@ -215,6 +225,41 @@ def create_app(
     def exception_summary(_principal: Authenticated):
         return [_json(item) for item in exceptions.classification_summary()]
 
+    @app.get("/api/exceptions/unresolved-ids")
+    def unresolved_exception_ids(_principal: Authenticated):
+        return {"items": exceptions.unresolved_ids()}
+
+    @app.post("/api/exceptions/resolve-all")
+    def resolve_all_exceptions(body: ExceptionActionRequest, principal: Authenticated):
+        from datetime import datetime, timezone
+
+        require_role(principal, ExceptionRole.APPROVER)
+        count = exceptions.resolve_all(
+            principal.actor,
+            principal.role,
+            body.reason,
+            datetime.now(timezone.utc),
+        )
+        return {"resolved_count": count}
+
+    @app.post("/api/exceptions/resolve-selected")
+    def resolve_selected_exceptions(
+        body: BulkExceptionActionRequest, principal: Authenticated
+    ):
+        from datetime import datetime, timezone
+
+        require_role(principal, ExceptionRole.APPROVER)
+        if not body.exception_ids:
+            raise HTTPException(400, "at least one exception is required")
+        count = exceptions.resolve_all(
+            principal.actor,
+            principal.role,
+            body.reason,
+            datetime.now(timezone.utc),
+            body.exception_ids,
+        )
+        return {"resolved_count": count}
+
     @app.post("/api/exceptions/{exception_id}/{action}")
     def act_on_exception(
         exception_id: str,
@@ -273,8 +318,55 @@ def create_app(
                 reconciliation,
                 ingestion,
                 closes,
+                exception_repository=exceptions,
             )
         )
+
+    @app.post("/api/restart")
+    def restart(body: RestartRequest, principal: Authenticated):
+        require_role(principal, ExceptionRole.APPROVER)
+        requested = (settings.input_root / body.directory).resolve()
+        if settings.input_root not in requested.parents:
+            raise HTTPException(400, "input directory escapes configured root")
+        if not (requested / "feeds").is_dir() or not (requested / "manifests").is_dir():
+            raise HTTPException(
+                400, "input directory must contain feeds/ and manifests/"
+            )
+
+        Base.metadata.drop_all(ingestion.engine)
+        Base.metadata.create_all(ingestion.engine)
+        ingestion_result = ingest_generated_feeds(
+            requested, settings.evidence_root, settings.database_url
+        )
+        canonical_result = canonicalize(
+            ingestion,
+            CanonicalizationPolicy.load(settings.config_root / "canonicalization.json"),
+            canonical,
+        )
+        reconciliation_result = run_reconciliation(
+            canonical,
+            ReconciliationPolicy.load(settings.config_root / "reconciliation.json"),
+            reconciliation,
+        )
+        exception_result = create_exceptions(
+            reconciliation_result.run_key, reconciliation, exceptions
+        )
+        close_result = calculate_close(
+            reconciliation_result.run_key,
+            ingestion_result.run_key,
+            principal.actor,
+            reconciliation,
+            ingestion,
+            closes,
+            exception_repository=exceptions,
+        )
+        return {
+            "ingestion": _json(ingestion_result),
+            "canonicalization": _json(canonical_result),
+            "reconciliation": _json(reconciliation_result),
+            "exceptions": _json(exception_result),
+            "close": _json(close_result),
+        }
 
     @app.get("/api/close-decisions")
     def close_decisions(

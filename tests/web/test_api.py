@@ -138,5 +138,36 @@ def test_operator_journey_and_approver_boundary(tmp_path: Path) -> None:
         },
     )
     assert close.status_code == 200
+
+    assert (
+        client.post(
+            "/api/restart", headers=operator, json={"directory": "case"}
+        ).status_code
+        == 403
+    )
+    restarted = client.post(
+        "/api/restart", headers=approver, json={"directory": "case"}
+    )
+    assert restarted.status_code == 200
+    assert restarted.json()["close"]["outcome"] in {"CLOSE", "HOLD"}
+    restarted_body = restarted.json()
+    resolved = client.post(
+        "/api/exceptions/resolve-all",
+        headers=approver,
+        json={"reason": "all reconciliation differences reviewed"},
+    )
+    assert resolved.status_code == 200
+    final_close = client.post(
+        "/api/close-decisions",
+        headers=approver,
+        json={
+            "reconciliation_run_key": restarted_body["reconciliation"]["run_key"],
+            "ingestion_run_key": restarted_body["ingestion"]["run_key"],
+        },
+    )
+    assert final_close.status_code == 200
+    assert final_close.json()["outcome"] == "CLOSE"
+    assert final_close.json()["scorecard"]["pending_count"] == 0
+    assert final_close.json()["scorecard"]["unresolved_count"] == 0
     assert close.json()["outcome"] == "HOLD"
     assert close.json()["scorecard"]["accepted_count"] == 2000

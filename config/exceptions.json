@@ -33,6 +33,12 @@
       "recommended_action": "review linked source evidence without forcing a match",
       "escalation_path": "finance and engineering",
       "sla_hours": 4
+    },
+    "TIMING_DIFFERENCE": {
+      "owner": "partner_operations",
+      "recommended_action": "confirm settlement timing or approve the documented timing exception",
+      "escalation_path": "finance approver",
+      "sla_hours": 24
     }
   }
 }

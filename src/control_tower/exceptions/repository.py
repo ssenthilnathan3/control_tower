@@ -351,6 +351,80 @@ class ExceptionRepository:
     ) -> None:
         self._decide_resolution(exception_id, actor, role, reason, at, approved=False)
 
+    def resolve_all(
+        self,
+        actor: str,
+        role: ExceptionRole,
+        reason: str,
+        at: datetime,
+        exception_ids: list[str] | None = None,
+    ) -> int:
+        if role is not ExceptionRole.APPROVER:
+            raise ExceptionWorkflowError("approver role is required")
+        with Session(self.engine) as session, session.begin():
+            statement = select(ExceptionRecord).where(
+                ExceptionRecord.status != ExceptionStatus.RESOLVED.value
+            )
+            if exception_ids is not None:
+                statement = statement.where(
+                    ExceptionRecord.exception_id.in_(exception_ids)
+                )
+            records = session.scalars(statement).all()
+            for exception in records:
+                status = ExceptionStatus(exception.status)
+                if status in {ExceptionStatus.OPEN, ExceptionStatus.REOPENED}:
+                    before = exception.status
+                    exception.status = ExceptionStatus.INVESTIGATING.value
+                    self._action(
+                        session,
+                        exception,
+                        ExceptionAction.INVESTIGATION_STARTED,
+                        actor,
+                        role,
+                        reason,
+                        at,
+                        before,
+                        exception.assignee,
+                    )
+                    status = ExceptionStatus.INVESTIGATING
+                if status is ExceptionStatus.INVESTIGATING:
+                    before = exception.status
+                    exception.status = ExceptionStatus.PENDING_APPROVAL.value
+                    exception.resolution_requested_by = actor
+                    exception.material_override = False
+                    self._action(
+                        session,
+                        exception,
+                        ExceptionAction.RESOLUTION_REQUESTED,
+                        actor,
+                        role,
+                        reason,
+                        at,
+                        before,
+                        exception.assignee,
+                    )
+                if (
+                    exception.material_override
+                    and exception.resolution_requested_by == actor
+                ):
+                    raise ExceptionWorkflowError(
+                        "material override requires another approver"
+                    )
+                before = exception.status
+                exception.status = ExceptionStatus.RESOLVED.value
+                self._action(
+                    session,
+                    exception,
+                    ExceptionAction.APPROVED,
+                    actor,
+                    role,
+                    reason,
+                    at,
+                    before,
+                    exception.assignee,
+                )
+            return len(records)
+
     def _decide_resolution(
         self,
         exception_id: str,
@@ -574,6 +648,7 @@ class ExceptionRepository:
                     func.count(ExceptionRecord.id),
                     func.sum(ExceptionRecord.amount_paise),
                 )
+                .where(ExceptionRecord.status != ExceptionStatus.RESOLVED.value)
                 .group_by(ExceptionRecord.classification)
                 .order_by(func.sum(ExceptionRecord.amount_paise).desc())
             )
@@ -581,6 +656,29 @@ class ExceptionRepository:
                 ExceptionClassSummary(classification, count, amount_paise or 0)
                 for classification, count, amount_paise in rows
             ]
+
+    def resolved_decision_ids(self, decision_ids: list[int]) -> set[int]:
+        if not decision_ids:
+            return set()
+        with Session(self.engine) as session:
+            return set(
+                session.scalars(
+                    select(ExceptionRecord.latest_decision_id).where(
+                        ExceptionRecord.latest_decision_id.in_(decision_ids),
+                        ExceptionRecord.status == ExceptionStatus.RESOLVED.value,
+                    )
+                ).all()
+            )
+
+    def unresolved_ids(self) -> list[str]:
+        with Session(self.engine) as session:
+            return list(
+                session.scalars(
+                    select(ExceptionRecord.exception_id)
+                    .where(ExceptionRecord.status != ExceptionStatus.RESOLVED.value)
+                    .order_by(ExceptionRecord.id)
+                ).all()
+            )
 
     @staticmethod
     def _summary(record: ExceptionRecord) -> ExceptionSummary:

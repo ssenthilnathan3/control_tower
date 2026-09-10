@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from control_tower.exceptions import ExceptionRepository
 from control_tower.ingestion.registry import IngestionRegistry
 from control_tower.reconciliation import (
     ReconciliationOutcome,
@@ -34,6 +35,7 @@ def calculate_close(
     close_repository: CloseControlRepository | None = None,
     policy: ClosePolicy | None = None,
     decided_at: datetime | None = None,
+    exception_repository: ExceptionRepository | None = None,
 ):
     if not actor.strip():
         raise ValueError("close actor is required")
@@ -63,9 +65,29 @@ def calculate_close(
     selected_artifacts = tuple(sorted({control.artifact_hash for control in controls}))
     quarantines = ingestion_registry.quarantines_for_artifacts(selected_artifacts)
 
-    matched = [item for item in decisions if item.outcome in MATCHED]
-    pending = [item for item in decisions if item.outcome in PENDING]
-    unresolved = [item for item in decisions if item.outcome not in MATCHED | PENDING]
+    resolved_ids = (
+        exception_repository.resolved_decision_ids(
+            [decision.decision_id for decision in decisions]
+        )
+        if exception_repository
+        else set()
+    )
+    matched = [
+        item
+        for item in decisions
+        if item.outcome in MATCHED or item.decision_id in resolved_ids
+    ]
+    pending = [
+        item
+        for item in decisions
+        if item.outcome in PENDING and item.decision_id not in resolved_ids
+    ]
+    unresolved = [
+        item
+        for item in decisions
+        if item.outcome not in MATCHED | PENDING
+        and item.decision_id not in resolved_ids
+    ]
     scorecard = CloseScorecard(
         accepted_count=len(decisions),
         accepted_value_paise=sum(item.amount_paise for item in decisions),

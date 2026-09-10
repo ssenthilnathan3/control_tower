@@ -119,6 +119,10 @@ function App() {
   const [actions, setActions] = useState([])
   const [actionReason, setActionReason] = useState('')
   const [actionError, setActionError] = useState('')
+  const [selectedIds, setSelectedIds] = useState([])
+  const [bulkReason, setBulkReason] = useState('')
+  const [bulkMode, setBulkMode] = useState('')
+  const [runOperation, setRunOperation] = useState('ingest')
   const [filters, setFilters] = useState({
     priority: '',
     partner: '',
@@ -259,6 +263,8 @@ function App() {
     )
   const decideClose = () =>
     run('close', () => {
+      if (user.role !== 'APPROVER')
+        throw new Error('Approver role is required to decide close.')
       if (!ingestion[0] || !reconciliation[0])
         throw new Error('Ingest and reconcile before deciding close.')
       return api('/api/close-decisions', {
@@ -269,6 +275,17 @@ function App() {
         }),
       })
     })
+  const restart = () =>
+    run('restart', () =>
+      api('/api/restart', {
+        method: 'POST',
+        body: JSON.stringify({ directory: 'development' }),
+      }),
+    )
+  const executeRunOperation = () => {
+    const operations = { ingest, reconcile, close: decideClose, restart }
+    operations[runOperation]()
+  }
   const openException = async (item) => {
     setBusy('detail')
     try {
@@ -299,6 +316,67 @@ function App() {
       setSelected(null)
     } catch (e) {
       setActionError(e.message)
+    } finally {
+      setBusy('')
+    }
+  }
+  const resolveSelected = async () => {
+    if (!bulkReason.trim()) {
+      setNotice('Enter a bulk resolution reason before continuing.')
+      return
+    }
+    setBusy('bulk-resolve')
+    setNotice('')
+    try {
+      await api('/api/exceptions/resolve-selected', {
+        method: 'POST',
+        body: JSON.stringify({
+          reason: bulkReason.trim(),
+          exception_ids: selectedIds,
+        }),
+      })
+      setSelectedIds([])
+      setBulkReason('')
+      setBulkMode('')
+      await refresh()
+    } catch (e) {
+      setNotice(e.message)
+      await refresh()
+    } finally {
+      setBusy('')
+    }
+  }
+  const resolveAll = async () => {
+    if (!bulkReason.trim()) {
+      setNotice('Enter a bulk resolution reason before continuing.')
+      return
+    }
+    setBusy('resolve-all')
+    setNotice('')
+    try {
+      const result = await api('/api/exceptions/resolve-all', {
+        method: 'POST',
+        body: JSON.stringify({ reason: bulkReason.trim() }),
+      })
+      setSelectedIds([])
+      setBulkReason('')
+      setBulkMode('')
+      setNotice(`${result.resolved_count} anomalies resolved.`)
+      await refresh()
+    } catch (e) {
+      setNotice(e.message)
+    } finally {
+      setBusy('')
+    }
+  }
+  const openResolveAll = async () => {
+    setBusy('select-all')
+    try {
+      const result = await api('/api/exceptions/unresolved-ids')
+      setSelectedIds(result.items)
+      setBulkMode('all')
+    } catch (e) {
+      setNotice(e.message)
     } finally {
       setBusy('')
     }
@@ -378,7 +456,10 @@ function App() {
             onClick={() => navigate('exceptions')}
           >
             <AlertTriangle />
-            Exceptions <em>{exceptions.length}</em>
+            Exceptions{' '}
+            <em>
+              {exceptionSummary.reduce((sum, item) => sum + item.count, 0)}
+            </em>
           </button>
           <button
             class={view === 'runs' ? 'active' : ''}
@@ -475,13 +556,18 @@ function App() {
                 <button
                   class="button primary"
                   onClick={decideClose}
-                  disabled={busy === 'close'}
+                  disabled={busy === 'close' || user.role !== 'APPROVER'}
+                  title={
+                    user.role !== 'APPROVER'
+                      ? 'Approver role is required'
+                      : undefined
+                  }
                 >
                   <CheckCircle2 size={16} />
                   {busy === 'close' ? 'Calculating...' : 'Decide close'}
                 </button>
               </section>
-              <ScoreMetrics close={close} exceptions={exceptions} />
+              <ScoreMetrics close={close} exceptionSummary={exceptionSummary} />
               <div class="dashboard-grid">
                 <ExceptionDonut items={exceptionSummary} />
                 <aside class="runs">
@@ -489,15 +575,11 @@ function App() {
                     title="Recent ingestion"
                     icon={Database}
                     items={ingestion}
-                    action={ingest}
-                    busy={busy === 'ingest'}
                   />
                   <RunPanel
                     title="Recent reconciliation"
                     icon={FileCheck2}
                     items={reconciliation}
-                    action={reconcile}
-                    busy={busy === 'reconcile'}
                   />
                 </aside>
               </div>
@@ -562,6 +644,27 @@ function App() {
                   danger
                 />
               </section>
+              <div class="bulk-toolbar">
+                <span>{selectedIds.length} selected</span>
+                {user.role === 'APPROVER' && (
+                  <>
+                    <button
+                      class="button primary"
+                      disabled={!selectedIds.length || Boolean(busy)}
+                      onClick={() => setBulkMode('selected')}
+                    >
+                      Resolve selected
+                    </button>
+                    <button
+                      class="button"
+                      disabled={Boolean(busy)}
+                      onClick={openResolveAll}
+                    >
+                      Resolve all
+                    </button>
+                  </>
+                )}
+              </div>
               <ExceptionTable
                 items={filteredExceptions}
                 onOpen={openException}
@@ -571,6 +674,13 @@ function App() {
                 setFilters={setFilters}
                 loading={busy === 'detail'}
                 fixed
+                page={exceptionPage}
+                onPage={(offset) =>
+                  setExceptionPage((current) => ({ ...current, offset }))
+                }
+                selectedIds={selectedIds}
+                onSelection={setSelectedIds}
+                canResolve={user.role === 'APPROVER'}
               />
             </>
           )}
@@ -582,29 +692,32 @@ function App() {
                   <p>Execution history and reproducible control decisions.</p>
                 </div>
                 <div class="header-actions">
-                  <button
-                    class="button"
+                  <select
+                    class="operation-select"
+                    value={runOperation}
                     disabled={Boolean(busy)}
-                    onClick={ingest}
+                    onChange={(event) =>
+                      setRunOperation(event.currentTarget.value)
+                    }
                   >
-                    {busy === 'ingest' ? (
-                      <LoaderCircle class="spinner" size={15} />
-                    ) : (
-                      <Database size={15} />
-                    )}
-                    {busy === 'ingest' ? 'Ingesting...' : 'Ingest'}
-                  </button>
+                    <option value="ingest">Ingest source files</option>
+                    <option value="reconcile">Run reconciliation</option>
+                    <option value="close">Calculate close</option>
+                    <option value="restart" disabled={user.role !== 'APPROVER'}>
+                      Restart full pipeline
+                    </option>
+                  </select>
                   <button
                     class="button primary"
                     disabled={Boolean(busy)}
-                    onClick={reconcile}
+                    onClick={executeRunOperation}
                   >
-                    {busy === 'reconcile' ? (
+                    {busy ? (
                       <LoaderCircle class="spinner" size={15} />
                     ) : (
                       <Play size={15} />
                     )}
-                    {busy === 'reconcile' ? 'Reconciling...' : 'Reconcile'}
+                    {busy ? 'Running...' : 'Run'}
                   </button>
                 </div>
               </section>
@@ -613,24 +726,16 @@ function App() {
                   title="Ingestion runs"
                   icon={Database}
                   items={ingestion}
-                  action={ingest}
-                  busy={busy === 'ingest'}
                   limit={50}
                 />
                 <RunPanel
                   title="Reconciliation runs"
                   icon={FileCheck2}
                   items={reconciliation}
-                  action={reconcile}
-                  busy={busy === 'reconcile'}
                   limit={50}
                 />
               </div>
-              <CloseHistory
-                items={closes}
-                onDecide={decideClose}
-                busy={busy === 'close'}
-              />
+              <CloseHistory items={closes} />
             </>
           )}
         </div>
@@ -748,6 +853,67 @@ function App() {
           </aside>
         </div>
       )}
+      {bulkMode && (
+        <div class="modal-backdrop" onClick={() => !busy && setBulkMode('')}>
+          <section
+            class="bulk-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div class="modal-head">
+              <div>
+                <h2>
+                  {bulkMode === 'all'
+                    ? 'Resolve all anomalies'
+                    : 'Resolve selected anomalies'}
+                </h2>
+                <p>
+                  {bulkMode === 'all'
+                    ? 'Every unresolved anomaly will be moved through approval.'
+                    : `${selectedIds.length} unresolved anomalies will be resolved.`}
+                </p>
+              </div>
+              <button
+                class="icon-button"
+                disabled={Boolean(busy)}
+                onClick={() => setBulkMode('')}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <label for="bulk-reason">Resolution reason</label>
+            <textarea
+              id="bulk-reason"
+              value={bulkReason}
+              onInput={(event) => setBulkReason(event.currentTarget.value)}
+              placeholder="Describe the evidence and decision"
+              rows="4"
+              autofocus
+            />
+            <div class="modal-actions">
+              <button
+                class="button"
+                disabled={Boolean(busy)}
+                onClick={() => setBulkMode('')}
+              >
+                Cancel
+              </button>
+              <button
+                class="button primary"
+                disabled={Boolean(busy) || !bulkReason.trim()}
+                onClick={bulkMode === 'all' ? resolveAll : resolveSelected}
+              >
+                {busy && <LoaderCircle class="spinner" size={14} />}
+                {busy
+                  ? 'Resolving...'
+                  : bulkMode === 'all'
+                    ? 'Resolve all'
+                    : `Resolve ${selectedIds.length}`}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
@@ -807,7 +973,12 @@ function Metric({ label, value, detail, danger }) {
     </article>
   )
 }
-function ScoreMetrics({ close, exceptions }) {
+function ScoreMetrics({ close, exceptionSummary }) {
+  const queueCount = exceptionSummary.reduce((sum, item) => sum + item.count, 0)
+  const queueExposure = exceptionSummary.reduce(
+    (sum, item) => sum + item.amount_paise,
+    0,
+  )
   return (
     <section class="metrics">
       <Metric
@@ -836,8 +1007,8 @@ function ScoreMetrics({ close, exceptions }) {
       />
       <Metric
         label="Queue exposure"
-        value={money(exceptions.reduce((sum, x) => sum + x.amount_paise, 0))}
-        detail={`${exceptions.length} exceptions`}
+        value={money(queueExposure)}
+        detail={`${queueCount} exceptions`}
       />
     </section>
   )
@@ -853,9 +1024,40 @@ function ExceptionTable({
   fixed,
   page,
   onPage,
+  selectedIds,
+  onSelection,
+  canResolve,
 }) {
   const update = (name, value) =>
     setFilters?.((current) => ({ ...current, [name]: value }))
+  const eligible = items.filter(
+    (item) => canResolve && item.status !== 'RESOLVED',
+  )
+  const allEligibleSelected =
+    eligible.length > 0 &&
+    eligible.every((item) => selectedIds?.includes(item.exception_id))
+  const toggleAll = () => {
+    if (allEligibleSelected) {
+      onSelection(
+        selectedIds.filter(
+          (id) => !eligible.some((item) => item.exception_id === id),
+        ),
+      )
+    } else {
+      onSelection([
+        ...new Set([
+          ...(selectedIds || []),
+          ...eligible.map((item) => item.exception_id),
+        ]),
+      ])
+    }
+  }
+  const toggleOne = (id) =>
+    onSelection(
+      selectedIds.includes(id)
+        ? selectedIds.filter((item) => item !== id)
+        : [...selectedIds, id],
+    )
   return (
     <section class="panel queue">
       <div class="panel-head">
@@ -868,6 +1070,17 @@ function ExceptionTable({
         <table>
           <thead>
             <tr>
+              {onSelection && (
+                <th class="check-cell">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all unresolved anomalies"
+                    checked={allEligibleSelected}
+                    disabled={!eligible.length}
+                    onChange={toggleAll}
+                  />
+                </th>
+              )}
               <th>Priority</th>
               <th>Partner</th>
               <th>Classification</th>
@@ -877,6 +1090,7 @@ function ExceptionTable({
             </tr>
             {filters && (
               <tr class="filter-row">
+                <th class="check-cell" />
                 <th>
                   <select
                     value={filters.priority}
@@ -939,14 +1153,33 @@ function ExceptionTable({
           <tbody>
             {loading && (
               <tr>
-                <td colspan="6" class="table-loader">
+                <td colspan={onSelection ? 7 : 6} class="table-loader">
                   <LoaderCircle class="spinner" size={20} />
                   Loading details...
                 </td>
               </tr>
             )}
             {items.map((item) => (
-              <tr onClick={() => onOpen(item)}>
+              <tr
+                class={
+                  selectedIds?.includes(item.exception_id) ? 'selected-row' : ''
+                }
+                onClick={() => onOpen(item)}
+              >
+                {onSelection && (
+                  <td
+                    class="check-cell"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${item.exception_id}`}
+                      checked={selectedIds.includes(item.exception_id)}
+                      disabled={!canResolve || item.status === 'RESOLVED'}
+                      onChange={() => toggleOne(item.exception_id)}
+                    />
+                  </td>
+                )}
                 <td>
                   <Badge value={item.priority} />
                 </td>
@@ -961,7 +1194,7 @@ function ExceptionTable({
             ))}
             {!items.length && (
               <tr>
-                <td colspan="6" class="empty">
+                <td colspan={onSelection ? 7 : 6} class="empty">
                   No exceptions in this view
                 </td>
               </tr>
@@ -1005,10 +1238,12 @@ function RunPanel({ title, icon: Icon, items, action, busy, limit = 4 }) {
           <Icon size={17} />
           <h3>{title}</h3>
         </div>
-        <button class="button small" disabled={busy} onClick={action}>
-          {busy && <LoaderCircle class="spinner" size={13} />}
-          {busy ? 'Running...' : 'New run'}
-        </button>
+        {action && (
+          <button class="button small" disabled={busy} onClick={action}>
+            {busy && <LoaderCircle class="spinner" size={13} />}
+            {busy ? 'Running...' : 'New run'}
+          </button>
+        )}
       </div>
       <div>
         {items.slice(0, limit).map((item) => (
@@ -1033,10 +1268,12 @@ function CloseHistory({ items, onDecide, busy }) {
           <h3>Close decisions</h3>
           <span>Persisted policy outcomes</span>
         </div>
-        <button class="button small" disabled={busy} onClick={onDecide}>
-          {busy && <LoaderCircle class="spinner" size={13} />}
-          {busy ? 'Calculating...' : 'Decide close'}
-        </button>
+        {onDecide && (
+          <button class="button small" disabled={busy} onClick={onDecide}>
+            {busy && <LoaderCircle class="spinner" size={13} />}
+            {busy ? 'Calculating...' : 'Decide close'}
+          </button>
+        )}
       </div>
       <div class="table-scroll">
         <table>
