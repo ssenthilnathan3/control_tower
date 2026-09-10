@@ -39,6 +39,13 @@ def test_requires_server_configured_identity(tmp_path: Path) -> None:
     assert client.get("/api/exceptions", headers=_headers("unknown")).status_code == 401
     me = client.get("/api/me", headers=_headers("operator-token"))
     assert me.json() == {"actor": "operator-1", "role": "OPERATOR"}
+    invalid = client.post(
+        "/api/ingestion-runs",
+        headers=_headers("operator-token"),
+        json={"directory": "."},
+    )
+    assert invalid.status_code == 400
+    assert "feeds/ and manifests/" in invalid.json()["detail"]
 
 
 def test_operator_journey_and_approver_boundary(tmp_path: Path) -> None:

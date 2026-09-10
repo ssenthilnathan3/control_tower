@@ -105,6 +105,14 @@ def create_app(
             and settings.input_root not in requested.parents
         ):
             raise HTTPException(400, "input directory escapes configured root")
+        if not (requested / "feeds").is_dir() or not (
+            requested / "manifests"
+        ).is_dir():
+            raise HTTPException(
+                400,
+                "input directory must contain feeds/ and manifests/; "
+                "generated data is usually under development",
+            )
         result = ingest_generated_feeds(
             requested, settings.evidence_root, settings.database_url
         )

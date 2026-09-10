@@ -44,7 +44,7 @@
     </section>
     <section>
       <h2>Run Control</h2>
-      <div class="toolbar"><input id="directory" value="." aria-label="Input directory"><button onclick="ingest()">Ingest</button><button onclick="reconcile()">Reconcile</button><button onclick="closeRun()">Decide close</button><button class="secondary" onclick="refresh()">Refresh</button></div>
+      <div class="toolbar"><input id="directory" value="development" aria-label="Input directory"><button onclick="ingest()">Ingest</button><button onclick="reconcile()">Reconcile</button><button onclick="closeRun()">Decide close</button><button class="secondary" onclick="refresh()">Refresh</button></div>
       <small>Input directory is relative to the configured server input root.</small>
     </section>
     <section class="wide">
@@ -60,7 +60,7 @@
   <dialog id="detail"><button style="float:right" onclick="detail.close()">Close</button><h2>Exception</h2><pre id="detailBody"></pre><div class="toolbar"><button onclick="action('investigate')">Investigate</button><button onclick="action('request-resolution')">Request resolution</button><button onclick="action('approve')">Approve</button><button class="secondary" onclick="action('reject')">Reject</button></div></dialog>
   <script>
     let token='', selected='', ingestionRuns=[], reconciliationRuns=[]; const $=id=>document.getElementById(id);
-    async function api(path, options={}) { options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`,'Content-Type':'application/json'}; const r=await fetch(path,options); if(!r.ok) throw new Error((await r.json()).detail||r.statusText); return r.json(); }
+    async function api(path, options={}) { options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`,'Content-Type':'application/json'}; const r=await fetch(path,options); const type=r.headers.get('content-type')||''; const body=type.includes('application/json')?await r.json():await r.text(); if(!r.ok) throw new Error(body.detail||body||r.statusText); return body; }
     function money(p){ return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR'}).format(p/100); }
     function esc(v){ const e=document.createElement('span'); e.textContent=String(v); return e.innerHTML; }
     async function login(){ token=$('token').value; try { const me=await api('/api/me'); $('identity').textContent=`${me.actor} · ${me.role}`; $('notice').textContent=''; refresh(); } catch(e){ $('notice').textContent=e.message; } }

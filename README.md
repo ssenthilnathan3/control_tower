@@ -18,6 +18,8 @@ the checked-in values are examples only.
 
 `CONTROL_TOWER_INPUT_ROOT` is the only directory the ingestion endpoint can read.
 The console's input field is relative to that root.
+Generated output is stored under `generated/development`, so use `development` in
+the console before selecting **Ingest**.
 
 ## Verify
 
