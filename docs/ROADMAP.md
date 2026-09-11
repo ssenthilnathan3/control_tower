@@ -179,9 +179,9 @@ done when:
 - a clean checkout can reproduce feeds, tests, metrics, and close output
 - the 12-minute demo covers every gate without manual data repair
 
-status: done for the assessment scope. clean setup, commands, observed evaluation
-output, the
-timed demo, recording checklist, limitations, security/privacy disclosure, and a
+status: implementation and documentation are done for the assessment scope. clean
+setup, commands, observed evaluation output, the timed demo script, recording
+checklist, limitations, security/privacy disclosure, and a
 detailed Phase 2 scale proposal are documented. Fresh-seed reconciliation and
 close tests pass. `uv run control-tower-evaluate` runs development and fresh-seed
 scenarios, writes scorecards, checks classification, false-match, exception
@@ -189,6 +189,8 @@ coverage, and control-total gates, and returns a failing exit status on gate
 failure. The current UI **Restart** action is explicitly a destructive local
 database reset, and bulk selected resolution is explicitly demo-only. Production
 load, recovery, security, and independent real-data validation remain Phase 2.
+The submitter still needs to record and review the required video; the repository
+cannot produce a genuine narrated demonstration automatically.
 
 ## Phase 2 (proposed, not implemented)
 
