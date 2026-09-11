@@ -151,26 +151,9 @@ read `truth/classifications.jsonl`.
 
 ## Phase 1 architecture
 
-```mermaid
-flowchart LR
-    G[Deterministic generator] -->|CSV + manifest| I[Ingestion contracts]
-    G -. evaluation only .-> T[Truth JSONL]
-    I -->|exact bytes + row receipts| E[(Filesystem evidence)]
-    I -->|accepted versions| C[Canonicalization]
-    C --> R[Deterministic reconciliation]
-    R --> X[Exception workflow]
-    R --> K[Close control]
-    X --> K
-    I --> K
-    K --> UI[FastAPI + Preact console]
-    UI -->|Bearer principal| A[Operator / approver]
-    C --> DB[(SQLite via SQLAlchemy)]
-    R --> DB
-    X --> DB
-    K --> DB
-    T -. test-only comparison .-> V[Evaluator]
-    R -. decisions .-> V
-```
+![Phase 1 architecture](docs/diagrams/phase1-architecture.svg)
+
+Editable draw.io source: [`docs/diagrams/phase1-architecture.drawio`](docs/diagrams/phase1-architecture.drawio).
 
 Phase 1 is one process and one relational transaction boundary. SQLite stores
 local operational state; the filesystem stores immutable raw evidence. Alembic

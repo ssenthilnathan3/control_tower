@@ -20,35 +20,9 @@ validated partner contracts.
 
 ## Phase 1 architecture (implemented)
 
-```mermaid
-flowchart TB
-    subgraph Build[Offline synthetic-data build]
-      CFG[Versioned JSON config] --> GEN[Generator]
-      GEN --> FEEDS[CSV feeds + manifests]
-      GEN --> TRUTH[Truth JSONL]
-    end
-    subgraph Runtime[Single FastAPI process / modular monolith]
-      API[Authenticated API + Preact UI]
-      ING[Ingestion]
-      CAN[Canonicalization]
-      REC[Reconciliation]
-      EXC[Exceptions]
-      CLOSE[Close control]
-      API --> ING --> CAN --> REC --> EXC
-      REC --> CLOSE
-      EXC --> CLOSE
-      ING --> CLOSE
-    end
-    FEEDS --> ING
-    ING --> FS[(Content-addressed local evidence)]
-    ING --> DB[(SQLite / SQLAlchemy)]
-    CAN --> DB
-    REC --> DB
-    EXC --> DB
-    CLOSE --> DB
-    TRUTH -. test evaluator only .-> EVAL[Evaluation]
-    REC -. decisions .-> EVAL
-```
+![Phase 1 architecture](diagrams/phase1-architecture.svg)
+
+Editable draw.io source: [`diagrams/phase1-architecture.drawio`](diagrams/phase1-architecture.drawio).
 
 Modules under `src/control_tower/` own generator, ingestion, canonical,
 reconciliation, exceptions, close control, and web responsibilities. Operational
@@ -119,35 +93,9 @@ tenant/partner/business date; financial close remains an explicit bounded scope.
 
 ### Proposed components
 
-```mermaid
-flowchart LR
-    P[Partners: API / SFTP] --> GW[WAF + API gateway]
-    GW --> LAND[(Encrypted versioned object landing)]
-    GW --> META[Ingestion metadata service]
-    META --> Q[(Durable event bus)]
-    Q --> VAL[Validation workers]
-    VAL --> RAW[(Immutable evidence bucket)]
-    VAL --> CAN[Canonical workers]
-    CAN --> PG[(Multi-AZ PostgreSQL)]
-    CAN --> RQ[(Reconciliation work queue)]
-    RQ --> REC[Partitioned reconciliation workers]
-    REC --> PG
-    REC --> EXC[Exception service]
-    EXC --> PG
-    PG --> CLOSE[Close coordinator]
-    CLOSE --> LEDGER[(Signed close/audit ledger)]
-    UI[Operator console] --> IDP[OIDC IdP]
-    UI --> BFF[API/BFF]
-    IDP --> BFF
-    BFF --> PG
-    BFF --> CLOSE
-    RAW --> EXP[Evidence export service]
-    BFF --> EXP
-    OBS[Metrics / logs / traces / SIEM] -.-> GW
-    OBS -.-> VAL
-    OBS -.-> REC
-    OBS -.-> CLOSE
-```
+![Phase 2 scale design](diagrams/phase2-scale.svg)
+
+Editable draw.io source: [`diagrams/phase2-scale.drawio`](diagrams/phase2-scale.drawio).
 
 Object storage is the source-byte system of record; PostgreSQL owns identities,
 lineage, policies, decisions, workflow, and close scope. A durable bus decouples
