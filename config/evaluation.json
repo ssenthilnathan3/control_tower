@@ -1,0 +1,10 @@
+{
+  "development_seed": 20260908,
+  "fresh_seed": 987654,
+  "output_root": "generated/evaluation",
+  "generator_config": "config/generator.json",
+  "canonicalization_config": "config/canonicalization.json",
+  "reconciliation_config": "config/reconciliation.json",
+  "exceptions_config": "config/exceptions.json",
+  "close_config": "config/close_control.json"
+}

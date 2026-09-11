@@ -1,356 +1,300 @@
-# system design
+# System design
 
-## problem
+This document labels current behavior as **Implemented (Phase 1)** and future
+work as **Proposed (Phase 2)**. Proposed controls, SLOs, scale, and cost figures
+are design targets, not measured production claims.
 
-one disbursement shows up in three systems. the originator says what should be
-paid. the bank says what moved. the LMS says what was booked. those records do
-not always arrive together and they do not use the same schema.
+## Problem and assumptions
 
-the control tower needs to answer three things:
+One disbursement appears in three systems: originator intent, bank movement, and
+LMS booking. Deliveries differ in schema and timing. The control tower must show
+what evidence arrived, what fails to reconcile (including INR exposure), who owns
+the work, and whether a selected scope may close without forcing uncertain
+records together.
 
-- what evidence do we have?
-- what does not reconcile, including the INR value?
-- who needs to act before we can close?
+Phase 1 assumes synthetic data, INR integer paise, offset-aware timestamps,
+`+05:30` operating time, zero amount tolerance, exact/documented-composite
+matching, and a 120-minute grace window. Originator is expected intent, bank is
+fund movement, and LMS is loan creation. These are assessment assumptions, not
+validated partner contracts.
 
-the dangerous shortcut is to force records together until totals look right.
-we do the opposite. source data stays immutable. uncertain records stay visible.
+## Phase 1 architecture (implemented)
 
-## assumptions
-
-- all data is synthetic
-- money is INR and stored as integer paise
-- timestamps include an offset; the configured timezone is `+05:30`
-- the originator instruction is the expected disbursement
-- bank settlement proves movement of money
-- LMS booking proves creation of the loan record
-- amount tolerance is zero for Phase 1
-- a timing difference is pending only inside the configured grace window
-- probable or fuzzy matching is not part of Phase 1
-
-some of these rules may change. they need to stay in config or in a versioned
-rule, not disappear into a query.
-
-## design
-
-Phase 1 is a modular monolith.
-
-why not services? we have one small workload and several operations that need
-the same financial snapshot. splitting ingestion, matching, exceptions, and
-close into services would add message delivery and partial-failure problems.
-what are we gaining from that in this assessment? not much.
-
-the modules are still separate in code:
-
-```text
-src/control_tower/
-  generator/       builds deterministic source data
-  ingestion/       validates delivery and owns raw evidence
-  canonical/       maps accepted rows to one event shape
-  reconciliation/  owns match decisions and run identity
-  exceptions/      owns investigation state and actions
-  close_control/   owns close-or-hold decisions
+```mermaid
+flowchart TB
+    subgraph Build[Offline synthetic-data build]
+      CFG[Versioned JSON config] --> GEN[Generator]
+      GEN --> FEEDS[CSV feeds + manifests]
+      GEN --> TRUTH[Truth JSONL]
+    end
+    subgraph Runtime[Single FastAPI process / modular monolith]
+      API[Authenticated API + Preact UI]
+      ING[Ingestion]
+      CAN[Canonicalization]
+      REC[Reconciliation]
+      EXC[Exceptions]
+      CLOSE[Close control]
+      API --> ING --> CAN --> REC --> EXC
+      REC --> CLOSE
+      EXC --> CLOSE
+      ING --> CLOSE
+    end
+    FEEDS --> ING
+    ING --> FS[(Content-addressed local evidence)]
+    ING --> DB[(SQLite / SQLAlchemy)]
+    CAN --> DB
+    REC --> DB
+    EXC --> DB
+    CLOSE --> DB
+    TRUTH -. test evaluator only .-> EVAL[Evaluation]
+    REC -. decisions .-> EVAL
 ```
 
-one module should not update another module's state directly. for example,
-reconciliation can reference an ingestion record. it cannot rewrite the raw
-payload because a match became inconvenient.
+Modules under `src/control_tower/` own generator, ingestion, canonical,
+reconciliation, exceptions, close control, and web responsibilities. Operational
+records share one relational transaction boundary. Raw source bytes stay outside
+the database. Local evidence publication uses a temporary directory followed by
+atomic `os.replace`; a duplicate artifact hash reuses the existing evidence.
 
-## flow
+### Implemented flow and invariants
 
-```text
-config/generator.json
-        |
-        v
-generator.service.generate
-        |
-        +--> feeds/*.csv
-        +--> manifests/*.json
-        +--> truth/*.jsonl       evaluation only
-        +--> quality-report.json
-        |
-        v
-ingestion.service.ingest_generated_feeds
-        |
-        +--> validate header and fields
-        +--> check hash, count, and amount controls
-        +--> evidence/artifacts/<source>/<sha256>/source.csv
-        +--> records.jsonl with ACCEPTED or QUARANTINED
-        |
-        v
-canonical records
-        |
-        v
-exact -> composite -> timing -> unresolved
-        |
-        +--> exception queue
-        +--> close decision
+1. Generator creates deterministic source records, manifests, quality report,
+   and isolated truth. One event receives one primary anomaly label.
+2. Ingestion verifies exact header, fields, hash, row count, and total. Artifact
+   failures preserve evidence then reject; row failures quarantine only that row.
+3. Registry identity is `(source, batch_id, source_record_id)`. Same payload is a
+   replay; changed payload appends a version and creates a persistent conflict.
+4. Accepted source versions map to canonical events while retaining artifact,
+   payload, source-version, and line-location provenance.
+5. Reconciliation orders duplicate, documented composite, exact, missing,
+   contradictory status, amount mismatch, grace timing, then unresolved. A source
+   record cannot be consumed twice.
+6. Blocking outcomes create policy-owned exceptions. Actions capture actor, role,
+   reason, time, and before/after state; changed evidence can reopen work.
+7. Close uses one persisted reconciliation run and its explicitly selected
+   ingestion run. It stores policy/snapshot identity, complete accounting,
+   blockers, and deterministic decision hash.
+
+Source bytes are immutable; quarantined data cannot canonicalize; truth is not a
+runtime input; every canonical event points to one source version; every accepted
+instruction value is matched, pending, or unresolved; resolving an exception
+does not rewrite its deterministic classification; identical snapshot/config/rule
+inputs reproduce the same result.
+
+### Implemented consistency and retries
+
+- Reconciliation run and memberships commit in one database transaction.
+- Snapshot, normalized policy, and rule version form deterministic run identity;
+  unchanged reruns return `REPLAY`.
+- Incomplete evidence directories are not published. Retry requires the original
+  source feed.
+- Exception synchronization is idempotent for unchanged decisions and refreshes
+  or reopens on changed evidence.
+- Close sorts blockers before hashing and returns the stored result for identical
+  scope and policy.
+- Process restart retains SQLite and evidence. The UI action named **Restart** is
+  different: it destructively drops/recreates all local database tables before
+  rebuilding the demo journey. It must never be used as a production pattern.
+- Bulk selected resolution is an approver-only demo convenience that skips the
+  normal item-by-item maker-checker journey; it is not a production design.
+
+### Implemented failure boundaries
+
+Malformed rows are quarantined; undecodable files, wrong headers, and failed
+manifest controls reject the artifact after preserving what arrived. A process
+failure before atomic evidence publication leaves no visible final artifact.
+SQLite and local files mean host loss, disk exhaustion, corruption, or concurrent
+multi-host operation are not adequately addressed in Phase 1.
+
+## Phase 2 scale design (proposed)
+
+### Scale assumptions
+
+Capacity must be validated with real partner forecasts. Initial sizing assumes
+50 partners, 10 million source rows/day, 3-5 KB compressed evidence per row,
+business-day peaks of 2,000 rows/s, 10x burst headroom at ingress, 400 concurrent
+operators, seven-year evidence/audit retention subject to legal review, and one
+regional deployment with multi-AZ resilience. Reconciliation is micro-batched by
+tenant/partner/business date; financial close remains an explicit bounded scope.
+
+### Proposed components
+
+```mermaid
+flowchart LR
+    P[Partners: API / SFTP] --> GW[WAF + API gateway]
+    GW --> LAND[(Encrypted versioned object landing)]
+    GW --> META[Ingestion metadata service]
+    META --> Q[(Durable event bus)]
+    Q --> VAL[Validation workers]
+    VAL --> RAW[(Immutable evidence bucket)]
+    VAL --> CAN[Canonical workers]
+    CAN --> PG[(Multi-AZ PostgreSQL)]
+    CAN --> RQ[(Reconciliation work queue)]
+    RQ --> REC[Partitioned reconciliation workers]
+    REC --> PG
+    REC --> EXC[Exception service]
+    EXC --> PG
+    PG --> CLOSE[Close coordinator]
+    CLOSE --> LEDGER[(Signed close/audit ledger)]
+    UI[Operator console] --> IDP[OIDC IdP]
+    UI --> BFF[API/BFF]
+    IDP --> BFF
+    BFF --> PG
+    BFF --> CLOSE
+    RAW --> EXP[Evidence export service]
+    BFF --> EXP
+    OBS[Metrics / logs / traces / SIEM] -.-> GW
+    OBS -.-> VAL
+    OBS -.-> REC
+    OBS -.-> CLOSE
 ```
 
-ground truth is deliberately outside this runtime flow. if reconciliation can
-read `truth/classifications.jsonl`, the evaluation tells us nothing.
-
-## generator
-
-`generator/config.py` parses the seed, dates, partners, amounts, and anomaly
-rates. `_assign_anomalies` shuffles event indexes once and assigns disjoint
-ranges. one event gets one primary truth label. this avoids unclear expected
-results such as an event being both missing and an amount mismatch.
-
-`generator/service.py` creates the business event and then changes the source
-rows needed for that anomaly. composite bank records split the amount into two
-integer values. the second value gets the remainder, so odd paise still balance.
-
-`generator/io.py` fixes JSON ordering and CSV line endings. these details matter
-because feed hashes must be identical for the same seed.
-
-current output for the default config:
-
-| item | value |
-| --- | ---: |
-| instructions | 2,000 |
-| source rows | 6,030 |
-| partners | 3 |
-| business days | 3 |
-| anomalous events | 240 |
-
-## ingestion
-
-`ingestion/contracts.py` owns source validation. it checks exact headers,
-required IDs, positive paise amounts, INR, source statuses, and timezone-aware
-timestamps. normalization does not get a chance to repair invalid input.
-
-`ingestion/service.py` has two failure levels.
-
-| failure | result |
-| --- | --- |
-| file cannot be decoded | reject artifact |
-| header does not match | reject artifact |
-| hash, row count, or amount total differs | preserve artifact, then reject |
-| one row has an invalid field | quarantine row; keep valid rows accepted |
-
-why preserve a failed delivery? because the operator needs to prove what was
-received. otherwise a partner can resend a corrected file and erase the reason
-the first batch failed.
-
-evidence is content-addressed:
-
-```text
-evidence/artifacts/<source>/<artifact_hash>/
-  source.csv       exact received bytes
-  records.jsonl    row IDs, hashes, locations, validation state
-  receipt.json     count, amount, and quarantine summary
-```
-
-the directory is built under a temporary name and published with `os.replace`.
-a reader either sees the complete artifact or nothing. if another process has
-already published the same hash, the second write reuses it.
-
-`ingestion.registry.IngestionRegistry` stores the stable identity as
-`(source, batch_id, source_record_id)`. same identity plus same payload is a
-replay. same identity plus different payload appends a version and moves the
-identity to `CONFLICT`. replaying either version stays blocked.
-
-## state
-
-raw evidence and generator truth live on the filesystem. operational ingestion
-state lives in a relational database through SQLAlchemy. local runs use
-`evidence/ingestion.db`, which survives process restarts.
-
-SQLite owns local operational state through SQLAlchemy. PostgreSQL is the
-deployment target for the same schema. the relational store owns:
-
-- ingestion registrations and identity conflicts
-- canonical events
-- reconciliation runs and match membership
-- exceptions and action history
-- close decisions and approvals
-
-Alembic owns schema upgrades. repository `create_all` calls keep isolated tests
-small, but they are not a deployment migration strategy. production startup must
-upgrade to the checked-in revision before serving traffic.
-
-why PostgreSQL? these records need unique constraints and transactions. using a
-queue or separate database for each module would make it harder to answer a
-basic question: which exact snapshot produced this close decision?
-
-raw files should remain outside relational rows. locally that is the evidence
-directory. in production it would be versioned object storage with retention
-and encryption policies.
-
-## invariants
-
-- source bytes do not change after receipt
-- every accepted or quarantined row points to retrievable evidence
-- quarantined rows cannot enter canonicalization
-- manifest mismatches cannot be reported as successful ingestion
-- ground truth cannot be read by runtime matching
-- a canonical record must point to one raw record
-- one source record cannot belong to two final matches
-- every accepted value ends as matched, pending, or unresolved
-- unresolved value cannot disappear when an exception is resolved
-- the same snapshot, config, and rule version produce the same close result
-
-exception transitions, approval separation, action immutability, and close
-reproducibility have direct tests.
-
-## matching
-
-implemented order:
-
-```text
-duplicate full-value delivery
-  -> documented composite with exact sum
-  -> exact reference + currency + status + amount before cutoff
-  -> missing source
-  -> contradictory status
-  -> amount mismatch
-  -> timing difference inside grace
-  -> unresolved, including orphan source records
-```
-
-order matters. if duplicate rows reach composite matching first, they can make
-an incorrect sum look valid. arbitrary subset-sum search is also excluded. a
-shared reference and exact amount relationship are required.
-
-each decision stores the rule version and source-version IDs it used. the run
-key hashes the active canonical snapshot, policy config, and rule version.
-rerunning unchanged input returns `REPLAY` instead of another run.
-
-`reconciliation.evaluation.evaluate` reads generator truth only after runtime
-matching finishes. seed `987654` currently produces 2,000 correct
-classifications and zero false matches.
-
-## exceptions
-
-blocking reconciliation outcomes create one exception per partner and business
-event. duplicate, amount mismatch, status mismatch, missing, and unresolved are
-blocking. timing differences inside grace stay pending outside the queue.
-
-`config/exceptions.json` maps each class to its owner, recommended action,
-escalation path, and SLA. amount thresholds assign priority. amounts remain integer
-paise in storage; INR conversion is presentation only.
-
-the workflow is `OPEN -> INVESTIGATING -> PENDING_APPROVAL -> RESOLVED`. rejection
-returns the item to investigation. a later reconciliation decision updates the
-evidence and reopens a resolved item. material overrides require a different
-approver from the person who requested resolution.
-
-each detection, assignment, transition, approval, rejection, and reopen appends an
-action with actor, role, reason, timestamp, and before/after state. application
-writes reject updates and deletes to these rows. production database permissions
-must give the runtime role insert-only access to action history as defense in depth.
-
-## close control
-
-the Phase 1 close scope is explicit: one persisted reconciliation run and the
-persisted ingestion run that owns its delivery-control receipts. this avoids both a
-global rule where an old failed delivery blocks every future close and a caller
-omitting a failed receipt. passed receipts must cover every artifact used by the
-reconciliation evidence.
-
-the close equation uses one originator instruction decision as the count unit:
-
-```text
-accepted count = exact + composite + pending + unresolved
-accepted value = exact + composite + pending + unresolved
-```
-
-quarantined rows and artifact control failures sit outside accepted totals, but
-remain visible blockers. malformed quarantine amounts are recorded as unknown
-rather than guessed. each blocker stores its type, stable record ID, known paise
-value, reason, and evidence reference.
-
-`config/close_control.json` versions pending and unresolved value thresholds and
-whether quarantine or delivery-control failures block. The demo permits up to INR 10
-crore of `TIMING_DIFFERENCE` exposure because that outcome is emitted only while the
-event remains inside the configured grace window. The amount stays explicitly
-pending in the scorecard and above-threshold pending exposure still blocks close.
-Approved confirmed exceptions remain linked to their original reconciliation
-decisions and audit history; close treats those authorised resolutions as cleared
-without rewriting source evidence or the deterministic decision.
-
-the persisted result contains the reconciliation run and snapshot hashes, normalized
-policy hash and version, actor, outcome, complete scorecard, ordered blockers, and a
-deterministic decision hash. actor and time are recording metadata, not calculation
-inputs, so another operator replaying the same scope receives the original result.
-
-## operator API
-
-FastAPI exposes the Python service boundaries under `/api`. bearer tokens are
-looked up in `CONTROL_TOWER_IDENTITIES_JSON`; the resulting principal supplies the
-actor and role for every mutation. request bodies cannot choose either value.
-operators may ingest, reconcile, investigate, and request resolution. approvers
-are additionally required for approval, rejection, and close decisions.
-
-ingestion paths resolve below `CONTROL_TOWER_INPUT_ROOT` before files are read. the
-small browser console is served by the same process and calls these authenticated
-endpoints. bypassing the UI therefore does not bypass role checks. production must
-replace the static token map with an identity-provider integration while preserving
-the same server-derived `Principal` boundary.
-
-## failure modes
-
-### process stops while writing evidence
-
-only the temporary directory exists. retry from the original feed. incomplete
-directories are never published as artifact hashes.
-
-### the same artifact arrives twice
-
-reuse the content-addressed evidence. the registry returns `REPLAY`, so no new
-source identity or payload version is created.
-
-### the same source identity has different bytes
-
-keep both artifacts, append the second payload as a new version, and mark the
-identity `CONFLICT`. replaying either version remains conflicted. do not
-overwrite the first version.
-
-### one row is malformed
-
-store its payload hash, source location, and validation errors. continue with
-valid rows. a bad amount that prevents control-total verification must also
-surface as an artifact control failure.
-
-### reconciliation fails halfway
-
-the run and all decision memberships are written in one database transaction.
-retry uses the same run key. exception sync can then be retried: unchanged
-decisions replay, while changed
-decisions refresh evidence and reopen resolved work. the close path must still not
-treat reconciliation alone as a complete control.
-
-### a close calculation is retried
-
-blockers are sorted before hashing. the reconciliation and ingestion run identities,
-scorecard, and normalized policy produce the same decision hash, so retry returns
-the stored result instead of creating another close decision.
-
-### optional AI is unavailable
-
-nothing changes in Phase 1. ingestion, deterministic matching, exceptions, and
-close must not depend on it.
-
-## tradeoffs
-
-| choice | what we gain | what we give up |
-| --- | --- | --- |
-| modular monolith | one snapshot and simpler local runs | modules cannot scale independently yet |
-| CSV feeds | easy generation and inspection | weaker typing than Parquet or an API schema |
-| filesystem evidence | exact bytes and simple replay | no built-in retention or multi-host access |
-| zero amount tolerance | no hidden financial difference | harmless rounding needs an explicit future rule |
-| disjoint anomalies | clean evaluation labels | fewer multi-failure scenarios |
-| deterministic matching | explainable decisions | lower recall when references are damaged |
-
-## open questions
-
-- do partner files really share one contract, or do we need one adapter per partner and source?
-- what source identity is stable across corrected deliveries?
-- should a quarantined non-financial field always block close?
-- which statuses are final for each source?
-- what makes an override material?
-- how long must raw evidence and audit history be retained?
-- should Phase 2 replace explicit receipt scope with partner, batch, and business-date fields?
-
-these need answers before their behavior is coded. until then, assumptions stay
-explicit and configurable.
+Object storage is the source-byte system of record; PostgreSQL owns identities,
+lineage, policies, decisions, workflow, and close scope. A durable bus decouples
+arrival from processing. Workers partition by tenant/partner/business date and
+autoscale. The close coordinator reads a completeness ledger and a repeatable
+database snapshot, not caller-selected arbitrary receipts. A signed/WORM audit
+export provides independent tamper evidence.
+
+### Consistency model
+
+- Strong consistency is required for source identity/version registration,
+  match membership uniqueness, exception transitions, approvals, completeness
+  seals, and final close publication.
+- Evidence upload completes and its SHA-256 is verified before metadata is made
+  eligible. Object keys are immutable and versioning/object lock is enabled.
+- Bus delivery is at least once. Consumers use inbox tables and idempotency keys;
+  producer transactions use an outbox/change-data-capture pattern.
+- Canonical and reconciliation outputs are immutable versions. Corrections append
+  new source/snapshot versions and supersede rather than mutate decisions.
+- Close acquires a scope lock, verifies all expected feeds and worker watermarks,
+  reads one repeatable snapshot, and atomically publishes decision plus outbox.
+- Read models and dashboards may be eventually consistent; UI displays watermark
+  and freshness. They cannot authorize close.
+
+### Proposed SLOs
+
+| Measure | Target | Window/condition |
+| --- | ---: | --- |
+| API availability | 99.9% monthly | Excludes planned maintenance; mutating API |
+| Accepted-feed durability | 99.999999999% | Object-store design target, not an app guarantee |
+| Ingestion acknowledgement | p95 < 5 s | After durable landing for files <= 100 MB |
+| Validation/canonicalization freshness | 99% < 10 min | From complete upload at normal load |
+| Reconciliation freshness | 99% < 20 min | From all required source feeds/watermark |
+| Operator reads | p95 < 1 s | Filtered queue/summary requests |
+| Close calculation | p95 < 60 s | <= 10 million source rows in sealed scope |
+| RPO / RTO | <= 5 min / <= 60 min | Regional database failure; quarterly restore test |
+
+Correctness gates override latency: stale/incomplete/ambiguous scope produces
+`HOLD`, never a guessed `CLOSE`. Error-budget exhaustion freezes non-critical
+rollouts and triggers capacity/correctness review.
+
+### Monitoring and alerting
+
+Instrument OpenTelemetry traces and structured, redacted logs with tenant,
+partner, batch, run, snapshot, policy, and correlation IDs, never raw customer
+fields or bearer tokens. Metrics cover delivery age, expected-vs-received files,
+hash/control failures, quarantine/conflict rates, queue age/depth, worker retry and
+dead-letter counts, reconciliation outcome/value distribution, false-match canary
+results, unmatched exposure, overdue exception value, close HOLD reason/value,
+database lag/locks, object errors, API latency/error rate, and auth denials.
+
+Page on missed completeness cutoff, unexplained money conservation violation,
+duplicate source consumption, close inconsistency, data-loss signal, security
+event, or SLO burn. Ticket slower partner-quality drift and capacity trends.
+Dashboards must separate event count from INR exposure. Synthetic canaries run
+known truth through production rules without mixing truth into runtime matching.
+
+### Retries and poison data
+
+Clients send an artifact checksum and idempotency key. Retry transient network,
+429, and 5xx failures with exponential backoff, full jitter, bounded attempts,
+and server `Retry-After`; never retry deterministic contract/auth failures without
+correction. Consumers acknowledge only after transactional inbox processing.
+Poison messages enter a dead-letter queue with evidence pointers and alerting,
+not raw PII. Operators can replay from a reviewed checkpoint; replay preserves
+the original payload and creates a new processing attempt, not a new source fact.
+Circuit breakers protect dependencies. Reconciliation and close remain safe to
+retry through stable scope/snapshot/policy idempotency keys.
+
+### Rollout and rollback
+
+1. Version source schemas, canonical mappings, match rules, exception policy, and
+   close policy independently; migrations use expand/migrate/contract.
+2. Replay a sanitized historical corpus and synthetic truth in CI, then shadow
+   new rules against production snapshots without affecting workflow/close.
+3. Compare count/value conservation and per-class deltas; require finance, risk,
+   engineering, security, and privacy approval for material changes.
+4. Canary by internal tenant, then 1%, 10%, 25%, 50%, and 100%, with hold periods
+   and automatic stop thresholds for errors, latency, or classification drift.
+5. Keep old rule workers and schemas readable through the rollback window.
+
+Rollback routes new scopes to the prior immutable version and replays from the
+last safe watermark. Never delete new evidence or rewrite decisions already used
+for close. If a bad rule contributed to a published close, freeze affected scopes,
+issue a superseding decision with incident linkage, notify control owners, and
+retain both results. Database rollback uses forward-compatible code first and a
+forward fix; destructive down-migrations are not the default.
+
+### Security, privacy, and AI safeguards (proposed)
+
+- OIDC/SAML SSO, short-lived tokens, MFA for approvers, scoped service identities,
+  tenant-aware authorization, segregation of duties, and periodic access review.
+- TLS/mTLS in transit; KMS envelope encryption at rest with tenant/context-bound
+  keys; secrets manager with rotation; private networks, egress deny-by-default,
+  WAF, malware scanning, signed artifacts/images, SBOM, dependency/container
+  scanning, patch SLAs, and penetration testing.
+- Database roles enforce least privilege. Audit tables are insert-only to runtime;
+  signed daily roots export to WORM storage. Break-glass access is time-bound,
+  approved, and alerted.
+- Minimize collection to reconciliation fields; tokenize customer identifiers;
+  keep PII out of logs/metrics/non-production; classify fields; document purpose,
+  residency, retention, legal hold, subject-request/deletion exceptions, and
+  processor agreements. Backups inherit deletion/expiry policy.
+- This repository has no runtime AI. If Phase 2 introduces AI, it may only
+  summarize evidence or recommend investigation steps. It cannot match, resolve,
+  approve, or close; deterministic controls remain authoritative.
+- AI inputs use allowlisted/minimized fields, redaction, regional no-training
+  contracts, encryption, prompt-injection-resistant rendering, tool egress
+  restrictions, and no direct database mutation. Outputs are labeled, cited to
+  evidence, logged with model/prompt version, confidence, and human disposition.
+- Offline evaluation covers hallucination, bias across partners, leakage,
+  adversarial input, and regression. Low confidence, missing citation, provider
+  outage, drift, or policy breach fails closed to the normal human queue. A kill
+  switch removes AI without changing ingestion, reconciliation, exceptions, or
+  close.
+
+### Estimated monthly cost
+
+Directional 2026 USD estimate for the stated 10-million-row/day, single-region,
+multi-AZ assumption; cloud/provider, discounts, retention, and actual bytes can
+change it materially. Excludes staff, tax, support plans, data egress, and DR in a
+second active region.
+
+| Component | Estimate/month | Basis |
+| --- | ---: | --- |
+| Kubernetes/serverless compute | $4,000-$10,000 | API plus burstable validation/reconciliation workers |
+| Multi-AZ PostgreSQL + IOPS/backups | $4,000-$12,000 | HA primary/read capacity; biggest workload uncertainty |
+| Object evidence/archive | $2,000-$8,000 | Roughly 30-150 TB retained with lifecycle tiers |
+| Managed event bus | $1,000-$4,000 | About 300M source-row events/month, batching assumed |
+| Observability/SIEM | $2,000-$8,000 | Aggressive log sampling/redaction required |
+| WAF, KMS, secrets, network, registry | $1,000-$3,000 | Baseline managed security/platform services |
+| Optional AI | $0 by default; cap $500 | Disabled runtime; only approved, sampled summaries if introduced |
+| **Total** | **$14,000-$45,000/month** | Before staff, support, egress, and second-region DR |
+
+A 30-day representative load test, retention forecast, query plan, and vendor
+calculator are required before budget approval. Storage lifecycle, batched bus
+messages, queue-driven autoscaling, metric cardinality limits, and sampled logs
+are the main cost controls.
+
+## Current open questions
+
+- Which partner-specific contracts, final statuses, correction identities, and
+  delivery completeness signals are authoritative?
+- Which quarantines and override values are material, and who may approve them?
+- What are contractual cutoff, SLO, retention, residency, legal-hold, RPO, and RTO
+  requirements?
+- Should close scope be partner/business-date/entity, and how are late files or
+  downstream reversals represented after close?
+- What measured peak volume, row size, concurrency, and evidence retrieval rate
+  should replace the Phase 2 sizing assumptions?

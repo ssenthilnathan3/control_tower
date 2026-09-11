@@ -1,4 +1,4 @@
-# roadmap
+# Roadmap and status
 
 phase 1 first. each milestone should leave behind something we can run and
 show. phase 2 does not start until the close result is reproducible on a fresh
@@ -108,10 +108,11 @@ done when:
 - the UI or API cannot bypass role checks
 - a resolved item can be reconstructed from its action history
 
-status: done at the domain and persistence boundary. all blocking decisions enter
+status: done. all blocking decisions enter
 the queue with policy-driven routing and SLA. transitions, maker-checker approval,
 append-only history, and reopen on changed evidence have direct tests. API role
-enforcement remains part of milestone 7.
+enforcement was completed in milestone 7. Bulk selected resolution remains a
+demo-only convenience and is not the target production workflow.
 
 ## 6. decide close or hold
 
@@ -177,3 +178,24 @@ done when:
 
 - a clean checkout can reproduce feeds, tests, metrics, and close output
 - the 12-minute demo covers every gate without manual data repair
+
+status: done for the assessment scope. clean setup, commands, observed evaluation
+output, the
+timed demo, recording checklist, limitations, security/privacy disclosure, and a
+detailed Phase 2 scale proposal are documented. Fresh-seed reconciliation and
+close tests pass. `uv run control-tower-evaluate` runs development and fresh-seed
+scenarios, writes scorecards, checks classification, false-match, exception
+coverage, and control-total gates, and returns a failing exit status on gate
+failure. The current UI **Restart** action is explicitly a destructive local
+database reset, and bulk selected resolution is explicitly demo-only. Production
+load, recovery, security, and independent real-data validation remain Phase 2.
+
+## Phase 2 (proposed, not implemented)
+
+Proposed work is documented in [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md): managed
+object evidence, multi-AZ PostgreSQL, durable queues and idempotent workers,
+completeness-ledger close scope, production identity/security/privacy controls,
+SLOs and observability, retry/DLQ operation, canary rollout and rollback, optional
+non-authoritative AI safeguards, disaster recovery, and validated cost/capacity
+modeling. None of these Phase 2 components should be inferred from the completed
+Phase 1 milestones.

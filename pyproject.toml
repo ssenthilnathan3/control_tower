@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 control-tower-generate = "control_tower.generator.cli:main"
+control-tower-evaluate = "control_tower.evaluation.cli:main"
 control-tower-web = "control_tower.web.app:main"
 
 [build-system]
@@ -19,7 +20,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [dependency-groups]
-dev = ["httpx>=0.28,<1", "pytest>=8,<10"]
+dev = ["httpx>=0.28,<1", "pytest>=8,<10", "ruff>=0.12,<1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
